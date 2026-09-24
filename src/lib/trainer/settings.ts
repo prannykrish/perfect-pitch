@@ -39,11 +39,10 @@ export interface TrainerSettings {
   tiers: InstrumentTier[];
   /** 0 = never-ending. */
   questionCount: number;
+  /** Move on by itself after a right answer; a wrong answer always waits for Space / Enter / click. */
   autoProceed: boolean;
   /** Pause before the next question after a correct answer (just a flash). */
   correctPauseMs: number;
-  /** Pause after a wrong answer so the correction can be read. */
-  wrongPauseMs: number;
   replayLimit: ReplayLimit;
   noteDurationMs: number;
   keyboardShortcuts: boolean;
@@ -102,7 +101,6 @@ export const DEFAULT_TRAINER_SETTINGS: TrainerSettings = {
   questionCount: 0,
   autoProceed: true,
   correctPauseMs: 250,
-  wrongPauseMs: 1800,
   replayLimit: "unlimited",
   noteDurationMs: 1500,
   keyboardShortcuts: true,

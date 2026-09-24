@@ -126,21 +126,28 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
       const s = settingsRef.current;
       if (s.instrumentMode === "fixed" && !adapterRef.current.everything && s.poolMode !== "everything") return s.instrumentId;
       const engine = getEngine();
-      const loaded = poolRef.current.filter((id) => engine.isLoaded(id));
-      const ids = loaded.length ? loaded : poolRef.current.slice(0, 1);
-      const defs = ids.map((id) => getInstrument(id)).filter((d): d is NonNullable<typeof d> => !!d);
-      const id = pickInstrumentId(defs, s.adaptive ? statsRef.current : undefined, avoid);
-      if (!engine.isLoaded(id)) {
+      // An instrument that fails to load (or loads silent) is dropped from the pool and another is tried.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (!poolRef.current.length) refillPool(true);
+        const loaded = poolRef.current.filter((id) => engine.isLoaded(id));
+        const ids = loaded.length ? loaded : poolRef.current.slice(0, 1);
+        const defs = ids.map((id) => getInstrument(id)).filter((d): d is NonNullable<typeof d> => !!d);
+        if (!defs.length) break;
+        const id = pickInstrumentId(defs, s.adaptive ? statsRef.current : undefined, avoid);
+        if (engine.isLoaded(id)) return id;
         setLoadingLabel(instrumentLabel(id));
         try {
           await engine.load(id);
+          return id;
+        } catch {
+          poolRef.current = poolRef.current.filter((x) => x !== id);
         } finally {
           setLoadingLabel(null);
         }
       }
-      return id;
+      return s.instrumentId;
     },
-    [settingsRef, adapterRef]
+    [settingsRef, adapterRef, refillPool]
   );
 
   // ----- lifecycle -----
@@ -274,11 +281,24 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
         ...fields,
       }).catch((err) => console.warn("logAttempt failed", err));
 
-      if (s.autoProceed) {
-        autoTimer.current = setTimeout(() => askNext(), result.correct ? s.correctPauseMs : s.wrongPauseMs);
+      // Right: move on after a short flash. Wrong: hold the feedback until Space / Enter / click.
+      if (s.autoProceed && result.correct) {
+        autoTimer.current = setTimeout(() => askNext(), s.correctPauseMs);
       }
     },
     [questionRef, phaseRef, settingsRef, adapterRef, askNext]
+  );
+
+  // ----- silent instrument: the engine drops it; replace the question it was asked in -----
+  useEffect(
+    () =>
+      getEngine().onSilence((ev) => {
+        poolRef.current = poolRef.current.filter((id) => !ev.instrumentIds.includes(id));
+        if (phaseRef.current !== "question") return;
+        clearTimer();
+        askNext();
+      }),
+    [phaseRef, askNext]
   );
 
   // ----- USB piano -----
@@ -311,6 +331,13 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
       if (key === "R") {
         e.preventDefault();
         hearAgain();
+        return;
+      }
+      if (key === "Enter") {
+        if (phaseRef.current === "answered") {
+          e.preventDefault();
+          askNext();
+        }
         return;
       }
       if (key === "Escape") {

@@ -252,8 +252,8 @@ Each phase ends in something usable. Acceptance criteria are what a new session 
 - **Phase 2 — Trainer depth** ✅ built 2026-09-24, awaiting Pranav's hands-on check: sequence mode, chords and clusters (both answer settings), intervals (pair, chain, stack), timbre roulette, cents mode, adaptive weighting from lifetime DB stats.
 - **Phase 3 — Stats tab** ✅ built 2026-09-24: all charts in section 6/Tab 5 with table twins and a range filter; weakest-items list (the adaptive picker uses the same lifetime data via `getMissWeights`).
 - **Phase 4 — Hear It, Play It** ✅ built 2026-09-24, awaiting Pranav's hands-on check: phrase generator, bundled Bach chorales, MIDI import, alignment grader, piano-roll diff, ladder, voice isolation, chunk mode, one-listen, shadow mode.
-- **Phase 5 — Find the Mistake**: all problem types, timeline answer UI, A/B.
-- **Phase 6 — Head to Keys depth**: prompt drills, hum-then-play with pitchy, theory drills, MIDI export.
+- **Phase 5 — Find the Mistake** ✅ built 2026-09-24, awaiting Pranav's hands-on check: all eight problem types, timeline answer UI with voice picker, fix / amount bonuses, A/B, stats breakdowns (plus the pending Phase 4 ones), planted-problem self-test.
+- **Phase 6 — Head to Keys depth** ✅ built 2026-09-24, awaiting Pranav's hands-on check: theory drills with six levels (chords by name, scales and modes, progressions, harmonisation) graded from MIDI with three strictness levels; prompt drill with countdown, count-in, click, backing, self-rating and first-note latency; hum-then-play with pitchy; recorder tempo / quantize / loop / .mid export.
 - **Phase 7 — Calendar**: planner, completion tracking, streak heatmap.
 - **Phase 8 — Polish and scale**: MusyngKite set, Supabase option, mobile layout, PWA/offline.
 
@@ -278,3 +278,12 @@ Each phase ends in something usable. Acceptance criteria are what a new session 
 | 2026-09-24 | Charts follow the dataviz skill: single-series blue, sequential blue heatmap, one axis per chart, table twin for every chart, range filter above all charts |
 | 2026-09-24 | Transcription grades pitch and order only by default; rhythm grading is a toggle. Early stages are about memory span |
 | 2026-09-24 | Bundled practice material: the 382 JSB chorales (16th-note grid); Pranav has no MIDI files yet, uploads supported |
+| 2026-09-24 | Find the Mistake: a drifting voice has its own diagnoses ("voice drifts flat / sharp") so it is a different answer from a single detuned note; location for a drift is the voice alone |
+| 2026-09-24 | Find the Mistake: wrong inversion / voicing always plays the clean reference first (it is not audible as wrong on its own); a global "clean version first" switch exists for every other type |
+| 2026-09-24 | Find the Mistake: the fix (right note / quality / inversion) and the cents amount are bonuses logged separately; they never lower the score. Right beat but wrong voice = half the location credit |
+| 2026-09-24 | Find the Mistake: voice-leading faults are parallel fifths / octaves only; the doubled-leading-tone variant waits for a key estimate of chorale phrases |
+| 2026-09-24 | Every quiz (trainer modes, transcription, mistakes): a right answer auto-proceeds; a wrong answer holds the feedback until Space, Enter or the Hear next button. Enter advances everywhere Space does |
+| 2026-09-24 | Head to Keys: theory drills have levels 1–6 (triads → inversions/sevenths/modes → seventh inversions/open → extensions/drop-2 → progressions → harmonisation) so the calendar can ramp; default level 1 with "mix in lower levels" on |
+| 2026-09-24 | Head to Keys: theory grading is strict by default (exact voicing), with "right bass" and "right notes" as easier settings; the fix reason is always spelled out |
+| 2026-09-24 | Head to Keys: prompt drill self-rating is 1–5 (4+ counts as "kept it"); the measured number is first-note latency from the downbeat; click and soft backing chords on by default |
+| 2026-09-24 | Head to Keys: hum-then-play is built despite the poor mic, with confidence and level gates in Settings; any octave accepted by default (voice register ≠ hands) |

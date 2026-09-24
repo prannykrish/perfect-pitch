@@ -77,7 +77,7 @@ export function QuizShell({ quiz, title, idleText, questionText, feedback, extra
             ) : (
               <>
                 <Button size="lg" onClick={quiz.askNext} disabled={phase !== "answered"}>
-                  <PlayIcon /> Hear next <Kbd>Space</Kbd>
+                  <PlayIcon /> Hear next <Kbd>Space</Kbd> <Kbd>Enter</Kbd>
                 </Button>
                 <Button size="lg" variant="outline" onClick={quiz.hearAgain} disabled={phase === "loading"}>
                   <RotateCcwIcon /> Hear again <Kbd>R</Kbd>

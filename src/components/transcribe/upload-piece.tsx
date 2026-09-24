@@ -5,14 +5,12 @@ import { toast } from "sonner";
 import { UploadIcon, Trash2Icon } from "lucide-react";
 import { deletePiece, listPieces, savePiece, type PieceSummary } from "@/lib/db/actions";
 import { forgetUploadedPiece, parseMidiFile } from "@/lib/transcribe/sources";
-import { useTranscribeSettings } from "@/lib/transcribe/settings";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-/** Upload MIDI files and pick one as the source. */
-export function UploadPiece() {
-  const { settings, update } = useTranscribeSettings();
+/** Upload MIDI files and pick one as the source. Controlled: the caller owns the selected id. */
+export function UploadPiece({ value, onChange }: { value: number | null; onChange: (id: number | null) => void }) {
   const [pieces, setPieces] = useState<PieceSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -37,7 +35,7 @@ export function UploadPiece() {
         toast.success(`${piece.name}: ${piece.tracks.length} track${piece.tracks.length === 1 ? "" : "s"}, ${piece.tracks.reduce((n, t) => n + t.notes.length, 0)} notes`);
       }
       await refresh();
-      if (lastId !== null) update({ uploadId: lastId, voices: [] });
+      if (lastId !== null) onChange(lastId);
     } catch (err) {
       toast.error(`Could not read that file: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -49,7 +47,7 @@ export function UploadPiece() {
   const remove = async (id: number) => {
     await deletePiece(id);
     forgetUploadedPiece(id);
-    if (settings.uploadId === id) update({ uploadId: null });
+    if (value === id) onChange(null);
     refresh();
   };
 
@@ -66,7 +64,7 @@ export function UploadPiece() {
         <>
           <Label className="text-xs text-muted-foreground">Piece</Label>
           <div className="flex items-center gap-1">
-            <Select items={items} value={settings.uploadId !== null ? String(settings.uploadId) : null} onValueChange={(v) => v && update({ uploadId: Number(v), voices: [] })}>
+            <Select items={items} value={value !== null ? String(value) : null} onValueChange={(v) => v && onChange(Number(v))}>
               <SelectTrigger size="sm" className="flex-1">
                 <SelectValue placeholder="Choose a piece" />
               </SelectTrigger>
@@ -78,8 +76,8 @@ export function UploadPiece() {
                 ))}
               </SelectContent>
             </Select>
-            {settings.uploadId !== null && (
-              <Button variant="ghost" size="icon-sm" aria-label="Delete piece" onClick={() => remove(settings.uploadId!)}>
+            {value !== null && (
+              <Button variant="ghost" size="icon-sm" aria-label="Delete piece" onClick={() => remove(value)}>
                 <Trash2Icon />
               </Button>
             )}

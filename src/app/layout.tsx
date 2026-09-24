@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { AppNav } from "@/components/app-nav";
+import { AudioWatch } from "@/components/audio-watch";
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <AppNav />
             <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">{children}</main>
             <Toaster position="bottom-right" />
+            <AudioWatch />
           </TooltipProvider>
         </ThemeProvider>
       </body>

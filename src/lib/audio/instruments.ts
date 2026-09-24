@@ -439,7 +439,7 @@ const VERSILIAN_ROWS: VRow[] = [
   ["Idiophones/Friction Idiophones/Wine Glasses - Slow", "Wine Glasses (slow)", "chromatic-percussion", 60, 96, "hard"],
   ["Idiophones/Friction Idiophones/Wine Glasses - Fast", "Wine Glasses (fast)", "chromatic-percussion", 60, 96, "hard"],
   ["Idiophones/Struck Idiophones/Gong 1", "Gong 1", "percussive", 48, 72, "chaos"],
-  ["Idiophones/Struck Idiophones/Gong 2", "Gong 2", "percussive", 48, 72, "chaos"],
+  // "Gong 2" is left out: every one of its samples is missing from the CDN (2026-09-24).
   ["Idiophones/Struck Idiophones/Anvil", "Anvil", "percussive", 60, 84, "chaos"],
   ["Idiophones/Struck Idiophones/Triangles", "Triangles", "percussive", 72, 96, "chaos"],
   ["Idiophones/Struck Idiophones/Cowbells", "Cowbells", "percussive", 60, 84, "chaos"],

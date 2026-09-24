@@ -47,7 +47,7 @@ npm run dev          # http://localhost:3000 (Chrome/Edge for Web MIDI)
 npm run build        # production build (also the main type check)
 npm run lint
 npm run samples      # download soundfonts (once)
-npm run samples:streamed  # vendor streamed sets as local mp3 (once, ~15 min; --dry-run, --only <id>)
+npm run samples:streamed  # vendor streamed sets as local mp3 (once, ~15 min; --dry-run, --only <id>, --fill-missing = only write substitutes for samples the CDN lacks)
 npm run pieces       # rebuild the bundled Bach chorales from the JSB dataset
 npm run selftest     # generator + grader checks (no browser needed)
 npm run db:generate  # after schema changes

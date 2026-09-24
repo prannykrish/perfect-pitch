@@ -92,6 +92,38 @@ export function CategoryAccuracyChart({ data, height = 224 }: { data: CategoryPo
   );
 }
 
+/** Any 0–100 value per day (e.g. shadow-mode accuracy), one line. */
+export function DailyPercentChart({ data, label }: { data: { day: string; value: number }[]; label: string }) {
+  const config: ChartConfig = { value: { label, color: "var(--series-1)" } };
+  return (
+    <ChartContainer config={config} className="h-56 w-full aspect-auto">
+      <LineChart data={data} margin={{ left: -12, right: 12, top: 8 }}>
+        <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
+        <XAxis dataKey="day" tickFormatter={shortDay} {...AXIS} minTickGap={24} />
+        <YAxis domain={[0, 100]} {...AXIS} width={40} />
+        <ChartTooltip content={<ChartTooltipContent labelFormatter={(v) => String(v)} />} cursor={{ stroke: "var(--viz-axis)" }} />
+        <Line type="monotone" dataKey="value" stroke="var(--color-value)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "var(--viz-surface)", fill: "var(--color-value)" }} activeDot={{ r: 5 }} />
+      </LineChart>
+    </ChartContainer>
+  );
+}
+
+/** Any numeric value per day (e.g. first-note latency in ms), one line, auto-scaled axis. */
+export function DailyValueChart({ data, label }: { data: { day: string; value: number }[]; label: string }) {
+  const config: ChartConfig = { value: { label, color: "var(--series-1)" } };
+  return (
+    <ChartContainer config={config} className="h-56 w-full aspect-auto">
+      <LineChart data={data} margin={{ left: -4, right: 12, top: 8 }}>
+        <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
+        <XAxis dataKey="day" tickFormatter={shortDay} {...AXIS} minTickGap={24} />
+        <YAxis {...AXIS} width={48} />
+        <ChartTooltip content={<ChartTooltipContent labelFormatter={(v) => String(v)} />} cursor={{ stroke: "var(--viz-axis)" }} />
+        <Line type="monotone" dataKey="value" stroke="var(--color-value)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "var(--viz-surface)", fill: "var(--color-value)" }} />
+      </LineChart>
+    </ChartContainer>
+  );
+}
+
 /** Smallest deviation reliably heard per day (lower is better). */
 export function JndChart({ data }: { data: { day: string; jnd: number | null }[] }) {
   const rows = data.filter((d) => d.jnd !== null);

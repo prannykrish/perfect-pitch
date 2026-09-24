@@ -4,6 +4,7 @@ import { useState } from "react";
 import { CheckIcon, XIcon, MinusIcon, RefreshCwIcon, CopyIcon } from "lucide-react";
 import { toast } from "sonner";
 import { getEngine, useEngineStore } from "@/lib/audio/engine";
+import { instrumentLabel } from "@/lib/audio/instruments";
 import type { ProbeResult } from "@/lib/audio/sample-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,9 @@ export function AudioDiagnostics() {
   const samples = useEngineStore((s) => s.samples);
   const checking = useEngineStore((s) => s.samplesChecking);
   const vendored = useEngineStore((s) => s.vendored);
+  const broken = useEngineStore((s) => s.broken);
   const [open, setOpen] = useState(false);
+  const brokenList = Object.entries(broken);
 
   const run = () => getEngine().checkSamples(true).catch((err) => toast.error(String(err)));
 
@@ -75,6 +78,22 @@ export function AudioDiagnostics() {
         <p className="text-xs text-muted-foreground">
           {samples.detail} Try a regular Chrome or Edge window, or run <code className="font-mono">npm run samples:streamed</code> to convert them to local mp3.
         </p>
+      )}
+      {brokenList.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-md border border-amber-500/40 p-2 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium">Dropped this session ({brokenList.length})</span>
+            <Button variant="ghost" size="xs" onClick={() => getEngine().clearBroken()}>
+              Give them another chance
+            </Button>
+          </div>
+          {brokenList.slice(0, 12).map(([id, reason]) => (
+            <div key={id} className="text-muted-foreground">
+              <span className="text-foreground">{instrumentLabel(id)}</span> · {reason}
+            </div>
+          ))}
+          {brokenList.length > 12 && <div className="text-muted-foreground">…and {brokenList.length - 12} more</div>}
+        </div>
       )}
       {open && samples && (
         <div className="flex flex-col gap-1 rounded-md border p-2">

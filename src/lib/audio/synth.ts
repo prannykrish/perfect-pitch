@@ -128,6 +128,8 @@ export interface SynthNoteEvent {
   time?: number; // absolute AudioContext time
   duration?: number | null; // seconds
   detune?: number; // cents
+  /** Called once the voice is scheduled (mirrors smplr's onStart so the engine can count voices). */
+  onStart?: () => void;
 }
 
 let noiseBuffer: AudioBuffer | null = null;
@@ -273,6 +275,7 @@ export class SynthInstrument {
     }
 
     for (const n of nodes) n.start(t0);
+    if (nodes.length) ev.onStart?.();
 
     const voice = {
       stop: (time?: number) => {

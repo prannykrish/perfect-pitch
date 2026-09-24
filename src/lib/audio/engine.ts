@@ -17,9 +17,10 @@ import {
   type Storage,
 } from "smplr";
 import { create } from "zustand";
-import { getInstrument, type InstrumentDef } from "./instruments";
+import { getInstrument, instrumentLabel, type InstrumentDef } from "./instruments";
 import { SynthInstrument } from "./synth";
 import { clearCachedFormat, detectSampleCapability, otherFormat, withSampleFormat, type SampleCapability, type SampleFormat } from "./sample-format";
+import { noteName } from "@/lib/music/notes";
 
 export interface NoteEventIn {
   note: number; // midi
@@ -27,6 +28,17 @@ export interface NoteEventIn {
   time?: number; // absolute AudioContext time
   duration?: number | null;
   detune?: number; // cents
+  /**
+   * Called when a voice really starts. smplr silently skips a note it has no sample for, so this
+   * is the only way to know a note made sound.
+   */
+  onStart?: () => void;
+}
+
+/** Emitted when a playback produced no sound at all on one or more instruments. */
+export interface SilenceEvent {
+  instrumentIds: string[];
+  notes: number[];
 }
 
 /** The subset of smplr's instrument API the engine relies on. */
@@ -90,6 +102,11 @@ export interface LoadingState {
   samplesChecking: boolean;
   /** Streamed instrument ids that exist locally as mp3 (npm run samples:streamed). */
   vendored: string[];
+  /**
+   * Instruments dropped for this session because they failed to load, loaded but made no sound,
+   * or went silent while playing. Id → reason. Random pools skip them.
+   */
+  broken: Record<string, string>;
 }
 
 export const useEngineStore = create<LoadingState>(() => ({
@@ -99,6 +116,7 @@ export const useEngineStore = create<LoadingState>(() => ({
   samples: null,
   samplesChecking: false,
   vendored: [],
+  broken: {},
 }));
 
 /** True for instruments that stream individual samples from smplr's CDN (not local soundfonts or synths). */
@@ -108,15 +126,29 @@ export function isStreamedInstrument(def: InstrumentDef): boolean {
 
 /**
  * Can this instrument play here? Local soundfonts and synths always can. Streamed ones can when they
- * are vendored locally, or when the browser can decode and reach the CDN.
+ * are vendored locally, or when the browser can decode and reach the CDN. Anything that has proved
+ * broken this session (failed to load, or made no sound) is out regardless.
  */
-export function isInstrumentAvailable(def: InstrumentDef, state: Pick<LoadingState, "samples" | "vendored"> = useEngineStore.getState()): boolean {
+export function isInstrumentAvailable(def: InstrumentDef, state: Pick<LoadingState, "samples" | "vendored"> & Partial<Pick<LoadingState, "broken">> = useEngineStore.getState()): boolean {
+  if (state.broken?.[def.id]) return false;
   if (!isStreamedInstrument(def)) return true;
   if (state.vendored.includes(def.id)) return true;
   return state.samples?.status !== "unavailable";
 }
 
 const MAX_LOADED = 14;
+
+/** One scheduled playback: which instruments were asked to sound, and whether they did. */
+interface Tracked {
+  id: string;
+  notes: number[];
+  started: number;
+}
+
+interface PendingPlayback {
+  cancelled: boolean;
+  stops: (() => void)[];
+}
 
 class Engine {
   private ctx: AudioContext | null = null;
@@ -126,6 +158,8 @@ class Engine {
   private sampleSetup: Promise<{ storage: Storage; format: SampleFormat | null; capability: SampleCapability }> | null = null;
   private manifest: Promise<Manifest | null> | null = null;
   private streamedManifest: Promise<StreamedManifest | null> | null = null;
+  private silenceListeners = new Set<(ev: SilenceEvent) => void>();
+  private pending = new Set<PendingPlayback>();
 
   get context(): AudioContext {
     if (!this.ctx) {
@@ -212,8 +246,87 @@ class Engine {
 
   /** Run (or re-run) the streamed-samples check and load the vendored manifest. Safe before any user gesture. */
   checkSamples(force = false): Promise<SampleCapability> {
-    if (force) this.streamedManifest = null;
+    if (force) {
+      this.streamedManifest = null;
+      this.clearBroken();
+    }
     return Promise.all([this.getSampleSetup(force), this.getStreamedManifest()]).then(([s]) => s.capability);
+  }
+
+  /** Drop an instrument for this session: unload it and keep it out of random pools. */
+  markBroken(id: string, reason: string) {
+    const entry = this.cache.get(id);
+    if (entry) {
+      try {
+        entry.instance?.dispose();
+      } catch {
+        /* ignore */
+      }
+      this.cache.delete(id);
+    }
+    useEngineStore.setState((s) => ({ broken: { ...s.broken, [id]: reason }, lastError: `${instrumentLabel(id)}: ${reason}` }));
+    this.publish();
+  }
+
+  clearBroken() {
+    useEngineStore.setState({ broken: {} });
+  }
+
+  /** Subscribe to "this playback made no sound" events. Returns the unsubscribe function. */
+  onSilence(listener: (ev: SilenceEvent) => void): () => void {
+    this.silenceListeners.add(listener);
+    return () => {
+      this.silenceListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Play one nearly silent, very short note to prove the instrument has samples at all. smplr
+   * resolves `ready` even when every sample failed to fetch or decode, and then plays nothing.
+   * Notes scheduled inside the scheduler's lookahead dispatch synchronously, so `onStart` has
+   * fired (or not) by the time `start` returns.
+   */
+  private probe(inst: Playable, def: InstrumentDef) {
+    const [lo, hi] = def.range;
+    const mid = Math.round((lo + hi) / 2);
+    const candidates = [...new Set([mid, mid - 5, mid + 7, lo + 2, hi - 2].map((m) => Math.min(hi, Math.max(lo, m))))];
+    for (const note of candidates) {
+      let started = false;
+      const stop = inst.start({
+        note,
+        velocity: 1,
+        time: this.currentTime + 0.01,
+        duration: 0.02,
+        onStart: () => {
+          started = true;
+        },
+      });
+      try {
+        stop();
+      } catch {
+        /* ignore */
+      }
+      if (started) return;
+    }
+    throw new Error("loaded but made no sound (samples missing or not decodable)");
+  }
+
+  /**
+   * Watch a scheduled playback: once every note should have started, any instrument that started
+   * no voice is marked broken and listeners are told. `stopAll` cancels the watch.
+   */
+  private watch(tracked: Tracked[], stops: (() => void)[], lastStartSec: number, endSec: number) {
+    const p: PendingPlayback = { cancelled: false, stops };
+    this.pending.add(p);
+    setTimeout(() => {
+      if (p.cancelled) return;
+      const silent = tracked.filter((t) => t.started === 0 && t.notes.length > 0);
+      if (!silent.length) return;
+      for (const t of silent) this.markBroken(t.id, `made no sound for ${[...new Set(t.notes)].slice(0, 6).map((m) => noteName(m)).join(", ")}`);
+      const ev: SilenceEvent = { instrumentIds: silent.map((t) => t.id), notes: [...new Set(silent.flatMap((t) => t.notes))] };
+      for (const l of this.silenceListeners) l(ev);
+    }, Math.max(0, lastStartSec * 1000) + 300);
+    setTimeout(() => this.pending.delete(p), Math.max(0, endSec * 1000) + 500);
   }
 
   private getManifest(): Promise<Manifest | null> {
@@ -294,6 +407,23 @@ class Engine {
     }
   }
 
+  /** Build the instrument and prove it makes sound; a silent one is disposed and rejected. */
+  private async createVerified(def: InstrumentDef): Promise<Playable> {
+    const inst = await this.create(def);
+    if (def.source.kind === "synth") return inst;
+    try {
+      this.probe(inst, def);
+    } catch (err) {
+      try {
+        inst.dispose();
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    }
+    return inst;
+  }
+
   private publish() {
     const loading: string[] = [];
     const loaded: string[] = [];
@@ -334,7 +464,7 @@ class Engine {
       def,
       lastUsed: performance.now(),
       loaded: false,
-      promise: Promise.resolve().then(() => this.create(def)),
+      promise: Promise.resolve().then(() => this.createVerified(def)),
     };
     this.cache.set(id, entry);
     this.publish();
@@ -348,8 +478,7 @@ class Engine {
       })
       .catch((err) => {
         this.cache.delete(id);
-        useEngineStore.setState({ lastError: `${def.label}: ${err?.message ?? err}` });
-        this.publish();
+        this.markBroken(id, err?.message ?? String(err));
       });
     return entry.promise;
   }
@@ -367,14 +496,20 @@ class Engine {
   ): Promise<void> {
     await this.resume();
     const inst = await this.load(instrumentId);
-    const time = this.currentTime + (opts.at ?? 0) + 0.02;
-    inst.start({
+    const at = (opts.at ?? 0) + 0.02;
+    const dur = opts.duration ?? 1.5;
+    const tracked: Tracked = { id: instrumentId, notes: [midi], started: 0 };
+    const stop = inst.start({
       note: midi,
       velocity: opts.velocity ?? 100,
-      time,
-      duration: opts.duration ?? 1.5,
+      time: this.currentTime + at,
+      duration: dur,
       detune: opts.detune ?? 0,
+      onStart: () => {
+        tracked.started++;
+      },
     });
+    this.watch([tracked], [stop], at, at + dur);
   }
 
   /**
@@ -388,22 +523,46 @@ class Engine {
     const ids = [...new Set(notes.map((n) => n.instrumentId))];
     const insts = new Map(await Promise.all(ids.map(async (id) => [id, await this.load(id)] as const)));
     const base = this.currentTime + 0.05;
+    const tracked = new Map<string, Tracked>(ids.map((id) => [id, { id, notes: [], started: 0 }]));
+    const stops: (() => void)[] = [];
     let end = 0;
+    let lastStart = 0;
     for (const n of notes) {
       const dur = n.duration ?? 1.5;
-      insts.get(n.instrumentId)!.start({
-        note: n.midi,
-        velocity: n.velocity ?? 100,
-        time: base + n.at,
-        duration: dur,
-        detune: n.detune ?? 0,
-      });
+      const t = tracked.get(n.instrumentId)!;
+      t.notes.push(n.midi);
+      stops.push(
+        insts.get(n.instrumentId)!.start({
+          note: n.midi,
+          velocity: n.velocity ?? 100,
+          time: base + n.at,
+          duration: dur,
+          detune: n.detune ?? 0,
+          onStart: () => {
+            t.started++;
+          },
+        })
+      );
       end = Math.max(end, n.at + dur);
+      lastStart = Math.max(lastStart, n.at);
     }
+    this.watch([...tracked.values()], stops, 0.05 + lastStart, 0.05 + end);
     return end;
   }
 
+  /** Stop everything: sounding voices and notes still queued in the schedulers. */
   stopAll() {
+    for (const p of this.pending) {
+      p.cancelled = true;
+      for (const stop of p.stops) {
+        try {
+          stop();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    this.pending.clear();
     for (const e of this.cache.values()) {
       try {
         e.instance?.stop();

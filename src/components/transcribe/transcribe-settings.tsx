@@ -164,7 +164,7 @@ export function TranscribeSettingsPanel() {
 
         {s.source === "upload" && (
           <section className="flex flex-col gap-2">
-            <UploadPiece />
+            <UploadPiece value={s.uploadId} onChange={(id) => update({ uploadId: id, voices: [] })} />
           </section>
         )}
 

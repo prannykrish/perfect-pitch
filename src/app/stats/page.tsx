@@ -8,8 +8,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { StatTile } from "@/components/stats/stat-tile";
 import { RangeFilter, parseRange } from "@/components/stats/range-filter";
 import { ChartCard } from "@/components/stats/chart-card";
-import { CategoryAccuracyChart, DailyAccuracyChart, DailyRepsChart, DailyResponseChart, JndChart } from "@/components/stats/charts";
+import { CategoryAccuracyChart, DailyAccuracyChart, DailyPercentChart, DailyRepsChart, DailyResponseChart, DailyValueChart, JndChart } from "@/components/stats/charts";
 import { ConfusionMatrix } from "@/components/stats/confusion-matrix";
+import { MATERIAL_LABELS, PROBLEM_LABELS, type MaterialKind, type ProblemType } from "@/lib/mistakes/types";
+import { LEVEL_LABELS, THEORY_KIND_LABELS, type TheoryKind } from "@/lib/compose/theory";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +22,23 @@ const MODE_LABELS: Record<string, string> = {
   intervals: "Intervals",
   chords: "Chords & clusters",
   cents: "Cents",
+  transcribe: "Hear It, Play It",
+  shadow: "Shadow mode",
+  mistakes: "Find the Mistake",
+  theory: "Theory drills",
+  prompt: "Prompt drill (self-rated)",
+  hum: "Hum then play",
+};
+
+const PROBLEM_SHORT: Record<string, string> = {
+  detune: "Detune",
+  "wrong-note": "Wrong note",
+  "chord-quality": "Chord quality",
+  inversion: "Inversion",
+  rhythm: "Rhythm",
+  drift: "Drift",
+  "voice-leading": "Voice leading",
+  ab: "A/B",
 };
 
 function pct(c: number, t: number) {
@@ -46,9 +65,29 @@ export default async function StatsPage(props: PageProps<"/stats">) {
     avgScore: r.avgScore,
   }));
 
+  const mistakeRows = s.mistakes.byType.map((r) => ({
+    label: PROBLEM_SHORT[r.type] ?? r.type,
+    name: PROBLEM_LABELS[r.type as ProblemType] ?? r.type,
+    total: r.total,
+    correct: r.correct,
+    avgScore: r.avgScore,
+    locCorrect: r.locCorrect,
+    diagCorrect: r.diagCorrect,
+    fixAsked: r.fixAsked,
+    fixCorrect: r.fixCorrect,
+  }));
+  const mistakeCentsRows = s.mistakes.byCents.map((r) => ({ label: `${r.amount}¢`, total: r.total, correct: r.correct, dirCorrect: r.dirCorrect }));
+  const shadowRows = s.shadowByDay.map((d) => ({ day: d.day, value: Math.round(d.avgScore * 100), total: d.total }));
+  const theoryLevelRows = s.theory.byLevel.map((r) => ({ label: `L${r.level}`, name: LEVEL_LABELS[r.level] ?? "", total: r.total, correct: r.correct, avgScore: r.avgScore }));
+  const theoryKindRows = s.theory.byKind.map((r) => ({ label: THEORY_KIND_LABELS[r.kind as TheoryKind] ?? r.kind, total: r.total, correct: r.correct, avgScore: r.avgScore }));
+  const promptLatencyRows = s.promptByDay.filter((d) => d.avgLatencyMs !== null).map((d) => ({ day: d.day, value: d.avgLatencyMs!, total: d.total, rating: d.avgRating }));
+  const humRows = s.humByDay.map((d) => ({ day: d.day, value: Math.round(d.avgScore * 100), total: d.total }));
+
   // Weakest items: at least 5 reps, lowest accuracy first
   const weakest = [
     ...pitchRows.map((r) => ({ kind: "Note", ...r })),
+    ...mistakeRows.map((r) => ({ kind: "Mistake", label: r.name, total: r.total, correct: r.correct })),
+    ...theoryKindRows.map((r) => ({ kind: "Theory", label: r.label, total: r.total, correct: r.correct })),
     ...octaveRows.map((r) => ({ kind: "Octave", label: `Octave ${r.label}`, total: r.total, correct: r.correct })),
     ...s.byInstrument.map((r) => ({ kind: "Instrument", label: instrumentLabel(r.instrumentId), total: r.total, correct: r.correct })),
     ...intervalRows.map((r) => ({ kind: "Interval", label: `${r.label} ${r.name}`, total: r.total, correct: r.correct })),
@@ -207,6 +246,158 @@ export default async function StatsPage(props: PageProps<"/stats">) {
             </Table>
           </CardContent>
         </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard
+          title="Find the Mistake: by problem type"
+          description="Fully right = location and diagnosis both right. The fix is a bonus."
+          empty={mistakeRows.length === 0}
+          table={{
+            columns: ["Problem", "Reps", "Fully right", "Location right", "Diagnosis right", "Fix named", "Avg credit"],
+            rows: mistakeRows.map((r) => [r.name, r.total, pct(r.correct, r.total), pct(r.locCorrect, r.total), pct(r.diagCorrect, r.total), r.fixAsked ? `${pct(r.fixCorrect, r.fixAsked)} of ${r.fixAsked}` : "–", `${Math.round(r.avgScore * 100)}%`]),
+            numeric: [1, 2, 3, 4, 5, 6],
+          }}
+        >
+          <CategoryAccuracyChart data={mistakeRows} />
+        </ChartCard>
+        <ChartCard
+          title="Find the Mistake: cents in context"
+          description="A detuned note or drifted voice inside real material: the production-relevant threshold"
+          empty={mistakeCentsRows.length === 0}
+          table={{
+            columns: ["Deviation", "Reps", "Fully right", "Direction right"],
+            rows: mistakeCentsRows.map((r) => [r.label, r.total, pct(r.correct, r.total), pct(r.dirCorrect, r.total)]),
+            numeric: [1, 2, 3],
+          }}
+        >
+          <CategoryAccuracyChart data={mistakeCentsRows} />
+        </ChartCard>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Find the Mistake: by source</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Source</TableHead>
+                  <TableHead className="text-right">Reps</TableHead>
+                  <TableHead className="text-right">Fully right</TableHead>
+                  <TableHead className="text-right">Avg credit</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {s.mistakes.bySource.map((r) => (
+                  <TableRow key={r.source}>
+                    <TableCell>{MATERIAL_LABELS[r.source as MaterialKind] ?? r.source}</TableCell>
+                    <TableCell className="text-right tabular-nums">{r.total}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(r.correct, r.total)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{Math.round(r.avgScore * 100)}%</TableCell>
+                  </TableRow>
+                ))}
+                {s.mistakes.bySource.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-muted-foreground">
+                      No Find the Mistake reps in this range yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Hear It, Play It</CardTitle>
+            <CardDescription>
+              Longest phrase fully right: {s.transcribe.longestCorrectBars ?? "–"} bar{s.transcribe.longestCorrectBars === 1 ? "" : "s"} · at 90%+: {s.transcribe.longestPassedBars ?? "–"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Phrase</TableHead>
+                  <TableHead className="text-right">Reps</TableHead>
+                  <TableHead className="text-right">Fully right</TableHead>
+                  <TableHead className="text-right">Avg credit</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {s.transcribe.byVoices.map((r) => (
+                  <TableRow key={`v-${r.voices}`}>
+                    <TableCell>
+                      {r.voices} voice{r.voices === 1 ? "" : "s"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{r.total}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(r.correct, r.total)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{Math.round(r.avgScore * 100)}%</TableCell>
+                  </TableRow>
+                ))}
+                {s.transcribe.byBars.map((r) => (
+                  <TableRow key={`b-${r.bars}`}>
+                    <TableCell>
+                      {r.bars} bar{r.bars === 1 ? "" : "s"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{r.total}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(r.correct, r.total)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{Math.round(r.avgScore * 100)}%</TableCell>
+                  </TableRow>
+                ))}
+                {s.transcribe.byVoices.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-muted-foreground">
+                      No transcription reps in this range yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+        <ChartCard
+          title="Shadow mode accuracy per day"
+          description="Share of reference notes hit live, within the timing window"
+          empty={shadowRows.length === 0}
+          table={{ columns: ["Day", "Accuracy", "Runs"], rows: shadowRows.map((d) => [d.day, `${d.value}%`, d.total]), numeric: [1, 2] }}
+        >
+          <DailyPercentChart data={shadowRows} label="Accuracy %" />
+        </ChartCard>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ChartCard
+          title="Theory drills by level"
+          description="Played on the piano and checked note for note"
+          empty={theoryLevelRows.length === 0}
+          table={{
+            columns: ["Level", "Reps", "Right", "Accuracy", "Avg credit"],
+            rows: theoryLevelRows.map((r) => [`${r.label} ${r.name}`, r.total, r.correct, pct(r.correct, r.total), `${Math.round(r.avgScore * 100)}%`]),
+            numeric: [1, 2, 3, 4],
+          }}
+        >
+          <CategoryAccuracyChart data={theoryLevelRows} />
+        </ChartCard>
+        <ChartCard
+          title="Prompt drill: first-note latency"
+          description="Milliseconds from the downbeat to your first note, per day. Lower is better."
+          empty={promptLatencyRows.length === 0}
+          table={{ columns: ["Day", "Latency ms", "Takes", "Avg rating"], rows: promptLatencyRows.map((d) => [d.day, d.value, d.total, d.rating.toFixed(1)]), numeric: [1, 2, 3] }}
+        >
+          <DailyValueChart data={promptLatencyRows} label="First note (ms)" />
+        </ChartCard>
+        <ChartCard
+          title="Hum then play"
+          description="Share of hummed notes played back right, per day"
+          empty={humRows.length === 0}
+          table={{ columns: ["Day", "Accuracy", "Takes"], rows: humRows.map((d) => [d.day, `${d.value}%`, d.total]), numeric: [1, 2] }}
+        >
+          <DailyPercentChart data={humRows} label="Accuracy %" />
+        </ChartCard>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">

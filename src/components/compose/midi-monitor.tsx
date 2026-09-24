@@ -1,17 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+/**
+ * Live Ableton-style roll of everything played on the USB piano, plus the recorder: record a take,
+ * play it back through any instrument (at any tempo, quantized or not, looped), save it, export
+ * it as a .mid file.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { CircleIcon, PlayIcon, SaveIcon, SquareIcon, Trash2Icon, ListMusicIcon } from "lucide-react";
+import { CircleIcon, DownloadIcon, PlayIcon, Repeat2Icon, SaveIcon, SquareIcon, Trash2Icon, ListMusicIcon } from "lucide-react";
 import { getEngine, isInstrumentAvailable, useEngineStore } from "@/lib/audio/engine";
 import { DEFAULT_INSTRUMENT_ID, INSTRUMENTS, instrumentLabel } from "@/lib/audio/instruments";
 import { getMidi, useMidiStore } from "@/lib/midi/midi";
 import { MidiRecorder, recordingDurationMs, type RecordedNote } from "@/lib/midi/recorder";
+import { normalizeStart, quantize, scaleTempo } from "@/lib/midi/take-tools";
+import { downloadTakeAsMidi } from "@/lib/midi/export";
+import { useComposeSettings } from "@/lib/compose/settings";
 import { deleteRecording, getRecording, listRecordings, saveRecording, type RecordingSummary } from "@/lib/db/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -24,6 +33,7 @@ import { useLatest } from "@/lib/hooks/use-latest";
 const LIVE_WINDOW_MS = 30000;
 
 export function MidiMonitor() {
+  const compose = useComposeSettings((s) => s.settings);
   const [instrumentId, setInstrumentId] = useState(DEFAULT_INSTRUMENT_ID);
   const [localSound, setLocalSound] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -33,7 +43,9 @@ export function MidiMonitor() {
   const [saved, setSaved] = useState<RecordingSummary[]>([]);
   const [view, setView] = useState<"live" | "take">("live");
   const [recElapsed, setRecElapsed] = useState(0);
-  const [takeDurationMs, setTakeDurationMs] = useState(1000);
+  const [tempoPct, setTempoPct] = useState(100);
+  const [quantizeOn, setQuantizeOn] = useState(false);
+  const [loop, setLoop] = useState(false);
 
   const held = useMidiStore((s) => s.held);
   const samples = useEngineStore((s) => s.samples);
@@ -45,11 +57,20 @@ export function MidiMonitor() {
   const liveT0 = useRef(0);
   const openLive = useRef(new Map<number, RollNote>());
 
-  const takeNotes = useRef<RollNote[]>([]);
+  // the take as it will be played: quantized and tempo-scaled per the controls
+  const effectiveTake = useMemo(() => {
+    if (!take) return null;
+    const q = quantizeOn ? quantize(take, compose.recBpm, compose.quantizeGrid) : take;
+    return scaleTempo(q, tempoPct / 100);
+  }, [take, quantizeOn, compose.recBpm, compose.quantizeGrid, tempoPct]);
+  const takeRoll = useMemo<RollNote[]>(() => (effectiveTake ?? []).map((n) => ({ midi: n.midi, startMs: n.startMs, endMs: n.endMs, velocity: n.velocity, kind: "played" })), [effectiveTake]);
+  const takeNotes = useLatest(takeRoll);
+  const takeDurationMs = useMemo(() => (effectiveTake ? Math.max(1000, recordingDurationMs(effectiveTake) + 300) : 1000), [effectiveTake]);
+  const takeDurationRef = useLatest(takeDurationMs);
   const takeNow = useRef(0);
-  const takeDuration = useRef(1000);
   const playRaf = useRef(0);
-  const stopFns = useRef<(() => void)[]>([]);
+  const loopRef = useLatest(loop);
+  const playAgainRef = useRef<(() => void) | null>(null);
 
   const recorder = useRef(new MidiRecorder());
   const instrumentRef = useLatest(instrumentId);
@@ -65,9 +86,6 @@ export function MidiMonitor() {
   useEffect(() => {
     getMidi().init();
     refreshSaved();
-    getEngine()
-      .checkSamples()
-      .catch(() => {});
   }, [refreshSaved]);
 
   // recording elapsed badge
@@ -107,10 +125,14 @@ export function MidiMonitor() {
         openLive.current.set(ev.note, n);
         if (localSoundRef.current) {
           const engine = getEngine();
-          engine.resume().then(() => engine.load(instrumentRef.current)).then((inst) => {
-            liveVoices.current.get(ev.note)?.();
-            liveVoices.current.set(ev.note, inst.start({ note: ev.note, velocity: ev.velocity }));
-          }).catch(() => {});
+          engine
+            .resume()
+            .then(() => engine.load(instrumentRef.current))
+            .then((inst) => {
+              liveVoices.current.get(ev.note)?.();
+              liveVoices.current.set(ev.note, inst.start({ note: ev.note, velocity: ev.velocity }));
+            })
+            .catch(() => {});
         }
       } else {
         const n = openLive.current.get(ev.note);
@@ -135,6 +157,13 @@ export function MidiMonitor() {
     setView("live");
   };
 
+  const loadTake = (notes: RecordedNote[], name: string) => {
+    setTake(notes);
+    setTakeName(name);
+    takeNow.current = 0;
+    setView("take");
+  };
+
   const stopRecording = () => {
     const notes = recorder.current.stop();
     setRecording(false);
@@ -142,61 +171,53 @@ export function MidiMonitor() {
       toast("Nothing was played during the recording");
       return;
     }
-    // normalise so the first note starts at 0
-    const t0 = Math.min(...notes.map((n) => n.startMs));
-    const shifted = notes.map((n) => ({ ...n, startMs: n.startMs - t0, endMs: n.endMs === null ? null : n.endMs - t0 }));
-    loadTake(shifted, `Take ${new Date().toLocaleTimeString()}`);
-  };
-
-  const loadTake = (notes: RecordedNote[], name: string) => {
-    setTake(notes);
-    setTakeName(name);
-    takeNotes.current = notes.map((n) => ({ midi: n.midi, startMs: n.startMs, endMs: n.endMs, velocity: n.velocity, kind: "played" }));
-    takeDuration.current = Math.max(1000, recordingDurationMs(notes) + 300);
-    setTakeDurationMs(takeDuration.current);
-    takeNow.current = 0;
-    setView("take");
+    loadTake(normalizeStart(notes), `Take ${new Date().toLocaleTimeString()}`);
   };
 
   const stopPlayback = useCallback(() => {
     cancelAnimationFrame(playRaf.current);
-    for (const s of stopFns.current) s();
-    stopFns.current = [];
     getEngine().stopAll();
+    takeNow.current = 0;
     setPlaying(false);
   }, []);
 
-  const playTake = async () => {
-    if (!take) return;
-    stopPlayback();
+  const playTake = useCallback(async () => {
+    const notes = effectiveTake;
+    if (!notes) return;
+    cancelAnimationFrame(playRaf.current);
     const engine = getEngine();
     await engine.resume();
-    let inst: Awaited<ReturnType<typeof engine.load>>;
+    engine.stopAll();
     try {
-      inst = await engine.load(instrumentId);
+      await engine.playNotes(notes.map((n) => ({ instrumentId, midi: n.midi, at: n.startMs / 1000, duration: Math.max(0.05, ((n.endMs ?? n.startMs + 300) - n.startMs) / 1000), velocity: n.velocity })));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
       return;
     }
-    const base = engine.currentTime + 0.1;
-    for (const n of take) {
-      const dur = ((n.endMs ?? n.startMs + 300) - n.startMs) / 1000;
-      stopFns.current.push(inst.start({ note: n.midi, velocity: n.velocity, time: base + n.startMs / 1000, duration: dur }));
-    }
     setPlaying(true);
     setView("take");
-    const start = performance.now() + 100;
+    const start = performance.now() + 50;
     const tick = () => {
       takeNow.current = performance.now() - start;
-      if (takeNow.current >= takeDuration.current) {
-        setPlaying(false);
+      if (takeNow.current >= takeDurationRef.current) {
         takeNow.current = 0;
+        if (loopRef.current) {
+          playAgainRef.current?.();
+          return;
+        }
+        setPlaying(false);
         return;
       }
       playRaf.current = requestAnimationFrame(tick);
     };
     playRaf.current = requestAnimationFrame(tick);
-  };
+  }, [effectiveTake, instrumentId, takeDurationRef, loopRef]);
+
+  useEffect(() => {
+    playAgainRef.current = () => {
+      playTake().catch(() => {});
+    };
+  }, [playTake]);
 
   const save = async () => {
     if (!take) return;
@@ -204,6 +225,7 @@ export function MidiMonitor() {
       await saveRecording({
         name: takeName || "Untitled take",
         instrumentId,
+        bpm: compose.recBpm,
         durationMs: recordingDurationMs(take),
         events: take,
       });
@@ -211,6 +233,15 @@ export function MidiMonitor() {
       refreshSaved();
     } catch (err) {
       toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const exportMidi = async () => {
+    if (!effectiveTake) return;
+    try {
+      await downloadTakeAsMidi(effectiveTake, compose.recBpm, takeName || "take");
+    } catch (err) {
+      toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -285,14 +316,33 @@ export function MidiMonitor() {
             </Label>
           </div>
           {take && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Input className="w-64" value={takeName} onChange={(e) => setTakeName(e.target.value)} placeholder="Take name" />
-              <Button variant="outline" onClick={save}>
-                <SaveIcon /> Save take
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                {take.length} notes · {(recordingDurationMs(take) / 1000).toFixed(1)}s
-              </span>
+            <div className="flex flex-col gap-3 rounded-lg border p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Input className="w-64" value={takeName} onChange={(e) => setTakeName(e.target.value)} placeholder="Take name" />
+                <Button variant="outline" onClick={save}>
+                  <SaveIcon /> Save take
+                </Button>
+                <Button variant="outline" onClick={exportMidi}>
+                  <DownloadIcon /> Export .mid
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {take.length} notes · {(recordingDurationMs(take) / 1000).toFixed(1)}s{tempoPct !== 100 && ` → ${(takeDurationMs / 1000).toFixed(1)}s at ${tempoPct}%`}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex w-64 items-center gap-2">
+                  <Label className="shrink-0 text-xs text-muted-foreground">Tempo {tempoPct}%</Label>
+                  <Slider min={50} max={150} step={5} value={[tempoPct]} onValueChange={(v) => setTempoPct(Array.isArray(v) ? v[0] : v)} />
+                </div>
+                <Label className="gap-2 text-xs">
+                  <Switch size="sm" checked={quantizeOn} onCheckedChange={setQuantizeOn} />
+                  Quantize to the grid ({compose.recBpm} bpm, set in Settings)
+                </Label>
+                <Label className="gap-2 text-xs">
+                  <Switch size="sm" checked={loop} onCheckedChange={setLoop} />
+                  <Repeat2Icon className="size-3.5" /> Loop
+                </Label>
+              </div>
             </div>
           )}
           <MidiPanel />

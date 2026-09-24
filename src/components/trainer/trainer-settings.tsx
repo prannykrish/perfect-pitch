@@ -476,11 +476,9 @@ export function TrainerSettingsPanel({ mode, disabled = false }: { mode: Trainer
           <Input id="question-count" type="number" min={0} value={s.questionCount} onChange={(e) => update({ questionCount: Math.max(0, Number(e.target.value) || 0) })} />
           <Label className="gap-2">
             <Switch size="sm" checked={s.autoProceed} onCheckedChange={(v) => update({ autoProceed: v })} />
-            Auto proceed after answering
+            Auto proceed after a right answer
           </Label>
-          {s.autoProceed && (
-            <SliderField label="Pause after a wrong answer" value={s.wrongPauseMs} display={`${(s.wrongPauseMs / 1000).toFixed(1)}s`} min={500} max={5000} step={100} onChange={(v) => update({ wrongPauseMs: v })} />
-          )}
+          <p className="text-xs text-muted-foreground">A wrong answer always waits: read the correction, then Space, Enter or Hear next.</p>
           <Label>Replays</Label>
           <SelectField value={s.replayLimit} items={REPLAY_LIMITS} onChange={(v) => update({ replayLimit: v })} />
           <SliderField label="Note length" value={s.noteDurationMs} display={`${(s.noteDurationMs / 1000).toFixed(1)}s`} min={200} max={4000} step={100} onChange={(v) => update({ noteDurationMs: v })} />

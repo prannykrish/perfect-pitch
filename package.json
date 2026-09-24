@@ -11,7 +11,7 @@
     "samples": "node scripts/download-samples.mjs",
     "samples:streamed": "tsx scripts/vendor-streamed.mts",
     "pieces": "node scripts/build-chorales.mjs",
-    "selftest": "tsx scripts/selftest-generators.mts && tsx scripts/selftest-grader.mts",
+    "selftest": "tsx scripts/selftest-generators.mts && tsx scripts/selftest-grader.mts && tsx scripts/selftest-mistakes.mts && tsx scripts/selftest-compose.mts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"

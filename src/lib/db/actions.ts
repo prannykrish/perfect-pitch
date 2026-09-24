@@ -87,6 +87,30 @@ export interface StatsData {
   /** Smallest deviation reliably heard (≥80% direction accuracy on ≥4 reps) per day; null when not enough data. */
   centsJndByDay: { day: string; jnd: number | null }[];
   sequence: { length: number; total: number; correct: number; avgScore: number }[];
+  /** Find the Mistake breakdowns (mode "mistakes"). */
+  mistakes: {
+    byType: { type: string; total: number; correct: number; avgScore: number; locCorrect: number; diagCorrect: number; fixAsked: number; fixCorrect: number }[];
+    /** Detuned note / drifted voice in context: how many cents, and whether the direction was heard. */
+    byCents: { amount: number; total: number; correct: number; dirCorrect: number }[];
+    bySource: { source: string; total: number; correct: number; avgScore: number }[];
+  };
+  /** Hear It, Play It breakdowns (mode "transcribe"). */
+  transcribe: {
+    longestCorrectBars: number | null;
+    /** Longest phrase with at least 90% credit. */
+    longestPassedBars: number | null;
+    byVoices: { voices: number; total: number; correct: number; avgScore: number }[];
+    byBars: { bars: number; total: number; correct: number; avgScore: number }[];
+  };
+  /** Shadow mode: live accuracy per day. */
+  shadowByDay: { day: string; total: number; avgScore: number }[];
+  /** Head to Keys: theory drills by kind and level, prompt-drill self-rating and first-note latency per day, hum-then-play per day. */
+  theory: {
+    byKind: { kind: string; total: number; correct: number; avgScore: number }[];
+    byLevel: { level: number; total: number; correct: number; avgScore: number }[];
+  };
+  promptByDay: { day: string; total: number; avgRating: number; avgLatencyMs: number | null }[];
+  humByDay: { day: string; total: number; avgScore: number }[];
 }
 
 const DAY = sql`date(${attempts.createdAt} / 1000, 'unixepoch', 'localtime')`;
@@ -219,6 +243,75 @@ export async function getStats(rangeDays: number | null): Promise<StatsData> {
     from ${attempts} where ${attempts.mode} = 'sequence' and ${attempts.createdAt} >= ${since}
     group by 1 order by 1`)) as { length: number; total: number; correct: number; avgScore: number }[];
 
+  const mistakesByType = (await db.all(sql`
+    select json_extract(${attempts.target}, '$.type') as type, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore,
+           sum(case when json_extract(${attempts.answer}, '$.locationOk') then 1 else 0 end) as locCorrect,
+           sum(case when json_extract(${attempts.answer}, '$.diagnosisOk') then 1 else 0 end) as diagCorrect,
+           sum(case when json_extract(${attempts.answer}, '$.fixOk') is not null then 1 else 0 end) as fixAsked,
+           sum(case when json_extract(${attempts.answer}, '$.fixOk') then 1 else 0 end) as fixCorrect
+    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
+    group by 1 order by total desc`)) as { type: string; total: number; correct: number; avgScore: number; locCorrect: number; diagCorrect: number; fixAsked: number; fixCorrect: number }[];
+
+  const mistakesByCents = (await db.all(sql`
+    select abs(json_extract(${attempts.target}, '$.cents')) as amount, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct,
+           sum(case when json_extract(${attempts.answer}, '$.diagnosisOk') then 1 else 0 end) as dirCorrect
+    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
+      and json_extract(${attempts.target}, '$.cents') is not null and json_extract(${attempts.target}, '$.type') != 'ab'
+    group by 1 order by 1`)) as { amount: number; total: number; correct: number; dirCorrect: number }[];
+
+  const mistakesBySource = (await db.all(sql`
+    select json_extract(${attempts.target}, '$.source') as source, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
+    group by 1 order by total desc`)) as { source: string; total: number; correct: number; avgScore: number }[];
+
+  const transcribeByVoices = (await db.all(sql`
+    select json_extract(${attempts.target}, '$.voices') as voices, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`)) as { voices: number; total: number; correct: number; avgScore: number }[];
+
+  const transcribeByBars = (await db.all(sql`
+    select json_extract(${attempts.target}, '$.bars') as bars, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`)) as { bars: number; total: number; correct: number; avgScore: number }[];
+
+  const [longest] = (await db.all(sql`
+    select max(case when ${attempts.correct} then json_extract(${attempts.target}, '$.bars') end) as correctBars,
+           max(case when ${attempts.score} >= 0.9 then json_extract(${attempts.target}, '$.bars') end) as passedBars
+    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}`)) as { correctBars: number | null; passedBars: number | null }[];
+
+  const shadowByDay = (await db.all(sql`
+    select ${DAY} as day, count(*) as total, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'shadow' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`)) as { day: string; total: number; avgScore: number }[];
+
+  const theoryByKind = (await db.all(sql`
+    select json_extract(${attempts.target}, '$.kind') as kind, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'theory' and ${attempts.createdAt} >= ${since}
+    group by 1 order by total desc`)) as { kind: string; total: number; correct: number; avgScore: number }[];
+
+  const theoryByLevel = (await db.all(sql`
+    select json_extract(${attempts.target}, '$.level') as level, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'theory' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`)) as { level: number; total: number; correct: number; avgScore: number }[];
+
+  const promptByDay = (await db.all(sql`
+    select ${DAY} as day, count(*) as total, avg(json_extract(${attempts.answer}, '$.rating')) as avgRating,
+           avg(json_extract(${attempts.answer}, '$.latencyMs')) as avgLatencyMs
+    from ${attempts} where ${attempts.mode} = 'prompt' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`)) as { day: string; total: number; avgRating: number; avgLatencyMs: number | null }[];
+
+  const humByDay = (await db.all(sql`
+    select ${DAY} as day, count(*) as total, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'hum' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`)) as { day: string; total: number; avgScore: number }[];
+
   return {
     rangeDays,
     totals: { total: num(totals?.total), correct: num(totals?.correct), avgMs: Math.round(num(totals?.avgMs)), avgScore: num(totals?.avgScore) },
@@ -235,6 +328,33 @@ export async function getStats(rangeDays: number | null): Promise<StatsData> {
     cents: cents.map((r) => ({ amount: num(r.amount), total: num(r.total), correct: num(r.correct), dirCorrect: num(r.dirCorrect) })),
     centsJndByDay: [...jndMap.entries()].map(([day, jnd]) => ({ day, jnd })),
     sequence: sequence.map((r) => ({ length: num(r.length), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+    mistakes: {
+      byType: mistakesByType.map((r) => ({
+        type: String(r.type ?? "?"),
+        total: num(r.total),
+        correct: num(r.correct),
+        avgScore: num(r.avgScore),
+        locCorrect: num(r.locCorrect),
+        diagCorrect: num(r.diagCorrect),
+        fixAsked: num(r.fixAsked),
+        fixCorrect: num(r.fixCorrect),
+      })),
+      byCents: mistakesByCents.map((r) => ({ amount: num(r.amount), total: num(r.total), correct: num(r.correct), dirCorrect: num(r.dirCorrect) })),
+      bySource: mistakesBySource.map((r) => ({ source: String(r.source ?? "?"), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+    },
+    transcribe: {
+      longestCorrectBars: longest?.correctBars == null ? null : num(longest.correctBars),
+      longestPassedBars: longest?.passedBars == null ? null : num(longest.passedBars),
+      byVoices: transcribeByVoices.map((r) => ({ voices: num(r.voices), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+      byBars: transcribeByBars.map((r) => ({ bars: num(r.bars), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+    },
+    shadowByDay: shadowByDay.map((r) => ({ day: r.day, total: num(r.total), avgScore: num(r.avgScore) })),
+    theory: {
+      byKind: theoryByKind.map((r) => ({ kind: String(r.kind ?? "?"), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+      byLevel: theoryByLevel.map((r) => ({ level: num(r.level), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+    },
+    promptByDay: promptByDay.map((r) => ({ day: r.day, total: num(r.total), avgRating: num(r.avgRating), avgLatencyMs: r.avgLatencyMs == null ? null : Math.round(num(r.avgLatencyMs)) })),
+    humByDay: humByDay.map((r) => ({ day: r.day, total: num(r.total), avgScore: num(r.avgScore) })),
   };
 }
 

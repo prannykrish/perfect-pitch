@@ -234,7 +234,8 @@ export function TranscribeTrainer() {
       setChunkIndex(ni);
       chunkRef.current = ni;
     }
-    if (s.autoProceed) listenTimer.current = setTimeout(() => next(), r.correct ? 1200 : 3500);
+    // Right: move on after a short pause. Wrong: hold the diff until Space / Enter / click.
+    if (s.autoProceed && r.correct) listenTimer.current = setTimeout(() => next(), 1200);
   }, [phraseRef, phaseRef, settingsRef, barsRef, chunkRef, next]);
 
   const giveUp = useCallback(() => {
@@ -305,6 +306,9 @@ export function TranscribeTrainer() {
         if (p === "recording") {
           e.preventDefault();
           submit();
+        } else if (p === "graded") {
+          e.preventDefault();
+          next();
         }
       } else if (e.key.toUpperCase() === "R") {
         hearAgain();
@@ -404,7 +408,7 @@ export function TranscribeTrainer() {
             ) : (
               <>
                 <Button size="lg" onClick={next} disabled={phase !== "graded"}>
-                  <SkipForwardIcon /> Next phrase <Kbd>Space</Kbd>
+                  <SkipForwardIcon /> Next phrase <Kbd>Space</Kbd> <Kbd>Enter</Kbd>
                 </Button>
                 <Button size="lg" variant="outline" onClick={hearAgain} disabled={phase === "loading" || phase === "listening"}>
                   <RotateCcwIcon /> Hear again <Kbd>R</Kbd>
