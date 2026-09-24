@@ -24,7 +24,10 @@ export function ComposeLayout() {
     getEngine()
       .checkSamples()
       .catch(() => {});
-  }, []);
+    // /compose?tab=theory (from the practice calendar)
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t === "monitor" || t === "theory" || t === "prompt" || t === "hum") setTab(t);
+  }, [setTab]);
 
   return (
     <div className={cn("grid gap-4", settingsOpen ? "lg:grid-cols-[340px_1fr]" : "grid-cols-1")}>

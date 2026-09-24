@@ -5,7 +5,7 @@ import { db, schema } from "./client";
 import type { RecordedNote } from "@/lib/midi/recorder";
 import type { Piece } from "@/lib/music/score";
 
-const { sessions, attempts, recordings, pieces, pieceProgress } = schema;
+const { sessions, attempts, recordings, pieces, pieceProgress, practicePlans } = schema;
 
 export async function startSession(input: { mode: string; settings: unknown }): Promise<number> {
   const [row] = await db
@@ -461,6 +461,87 @@ export async function recordPhraseResult(pieceKey: string, phraseIndex: number, 
   } else {
     await db.insert(pieceProgress).values({ pieceKey, phraseIndex, bestScore: score, attempts: 1, updatedAt: Date.now() });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Practice calendar
+// ---------------------------------------------------------------------------
+
+export interface PlanRow {
+  date: string;
+  items: unknown[];
+  notes: string;
+}
+
+export interface ModeDayRow {
+  day: string;
+  mode: string;
+  total: number;
+  correct: number;
+}
+
+export interface PracticeRange {
+  plans: PlanRow[];
+  /** Reps per day per attempt mode. */
+  reps: ModeDayRow[];
+  /** Minutes per day per session mode (sessions that were ended). */
+  minutes: { day: string; mode: string; minutes: number }[];
+}
+
+const SESSION_DAY = sql`date(${sessions.startedAt} / 1000, 'unixepoch', 'localtime')`;
+
+export async function getPracticeRange(from: string, to: string): Promise<PracticeRange> {
+  const plans = await db.select().from(practicePlans).where(and(gte(practicePlans.date, from), sql`${practicePlans.date} <= ${to}`));
+  const reps = (await db.all(sql`
+    select ${DAY} as day, ${attempts.mode} as mode, count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct
+    from ${attempts} where ${DAY} >= ${from} and ${DAY} <= ${to}
+    group by 1, 2 order by 1`)) as ModeDayRow[];
+  const minutes = (await db.all(sql`
+    select ${SESSION_DAY} as day, ${sessions.mode} as mode, sum(${sessions.endedAt} - ${sessions.startedAt}) / 60000.0 as minutes
+    from ${sessions} where ${sessions.endedAt} is not null and ${SESSION_DAY} >= ${from} and ${SESSION_DAY} <= ${to}
+    group by 1, 2`)) as { day: string; mode: string; minutes: number }[];
+  return {
+    plans: plans.map((p) => ({ date: p.date, items: Array.isArray(p.items) ? (p.items as unknown[]) : [], notes: p.notes })),
+    reps: reps.map((r) => ({ day: r.day, mode: r.mode, total: num(r.total), correct: num(r.correct) })),
+    minutes: minutes.map((m) => ({ day: m.day, mode: m.mode, minutes: Math.round(num(m.minutes) * 10) / 10 })),
+  };
+}
+
+export async function savePlan(date: string, items: unknown[], notes: string): Promise<void> {
+  const [existing] = await db.select({ id: practicePlans.id }).from(practicePlans).where(eq(practicePlans.date, date));
+  if (existing) await db.update(practicePlans).set({ items, notes, updatedAt: Date.now() }).where(eq(practicePlans.id, existing.id));
+  else await db.insert(practicePlans).values({ date, items, notes, updatedAt: Date.now() });
+}
+
+export async function savePlans(rows: { date: string; items: unknown[]; notes?: string }[]): Promise<void> {
+  for (const r of rows) await savePlan(r.date, r.items, r.notes ?? "");
+}
+
+export async function deletePlan(date: string): Promise<void> {
+  await db.delete(practicePlans).where(eq(practicePlans.date, date));
+}
+
+/** Reps per day for the heatmap and streaks. */
+export async function getRepsByDay(days: number): Promise<{ day: string; total: number; correct: number }[]> {
+  const since = Date.now() - days * 86400e3;
+  const rows = await db
+    .select({ day: sql<string>`${DAY}`, total: sql<number>`count(*)`, correct: CORRECT })
+    .from(attempts)
+    .where(gte(attempts.createdAt, since))
+    .groupBy(DAY)
+    .orderBy(sql`1`);
+  return rows.map((r) => ({ day: r.day, total: num(r.total), correct: num(r.correct) }));
+}
+
+/** Everything the Progress tab needs: lifetime stats plus reps per mode per day for trends. */
+export async function getProgressData(): Promise<{ all: StatsData; modeDays: ModeDayRow[] }> {
+  const all = await getStats(null);
+  const since = Date.now() - 60 * 86400e3;
+  const modeDays = (await db.all(sql`
+    select ${DAY} as day, ${attempts.mode} as mode, count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct
+    from ${attempts} where ${attempts.createdAt} >= ${since}
+    group by 1, 2 order by 1`)) as ModeDayRow[];
+  return { all, modeDays: modeDays.map((r) => ({ day: r.day, mode: r.mode, total: num(r.total), correct: num(r.correct) })) };
 }
 
 export interface RecordingSummary {

@@ -204,12 +204,14 @@ Lifetime and per-period:
 - Transcription: max phrase length passed, accuracy by voice count.
 - Weakest items list (feeds adaptive weighting).
 
-### Tab 6: Practice Calendar (`/calendar`)
+### Tab 6: Practice & Learn (`/calendar`)
 
-- Plan sessions per day: which modes, rep targets, minutes.
-- Daily view shows planned vs completed (auto-filled from attempts).
-- Streaks and a contribution-style heatmap.
-- Later: Google Calendar sync.
+Three tabs under one nav entry (widened by Pranav on 2026-09-24: "a calendar, but also a place to track my progress with certain aspects of music, and a place to synthesise music theory and teach me").
+
+- **Calendar**: plan sessions per day (mode, rep target, minutes, settings hint), planned vs completed auto-filled from `attempts` and `sessions`, a hand tick for anything the app cannot count, notes per day, an eight-week starter programme applied from any day (ramps from single notes to harmonising a chorale; day seven is light), streaks and a 26-week heatmap. Every item links straight into its tab and mode.
+- **Progress**: thirteen skills in three areas (hearing, harmony and theory, head to hands), each with a headline number, a stage, the next milestone in words, a 30-day trend, a drill link and a lesson link.
+- **Learn**: twelve lessons written for an ear that already hears everything (foundations, harmony, hearing and sound, practice), playable examples on every concept, "drill it" links, and a searchable glossary of every term.
+- Later: Google Calendar sync; "plan next week from the weakest skill".
 
 ## 7. Data model (Drizzle, SQLite)
 
@@ -254,7 +256,7 @@ Each phase ends in something usable. Acceptance criteria are what a new session 
 - **Phase 4 — Hear It, Play It** ✅ built 2026-09-24, awaiting Pranav's hands-on check: phrase generator, bundled Bach chorales, MIDI import, alignment grader, piano-roll diff, ladder, voice isolation, chunk mode, one-listen, shadow mode.
 - **Phase 5 — Find the Mistake** ✅ built 2026-09-24, awaiting Pranav's hands-on check: all eight problem types, timeline answer UI with voice picker, fix / amount bonuses, A/B, stats breakdowns (plus the pending Phase 4 ones), planted-problem self-test.
 - **Phase 6 — Head to Keys depth** ✅ built 2026-09-24, awaiting Pranav's hands-on check: theory drills with six levels (chords by name, scales and modes, progressions, harmonisation) graded from MIDI with three strictness levels; prompt drill with countdown, count-in, click, backing, self-rating and first-note latency; hum-then-play with pitchy; recorder tempo / quantize / loop / .mid export.
-- **Phase 7 — Calendar**: planner, completion tracking, streak heatmap.
+- **Phase 7 — Practice & Learn** ✅ built 2026-09-24, awaiting Pranav's check: planner with completion from attempts, starter programme, heatmap and streaks, Progress skills, Learn lessons and glossary.
 - **Phase 8 — Polish and scale**: MusyngKite set, Supabase option, mobile layout, PWA/offline.
 
 ## 10. Decisions log
@@ -287,3 +289,5 @@ Each phase ends in something usable. Acceptance criteria are what a new session 
 | 2026-09-24 | Head to Keys: theory grading is strict by default (exact voicing), with "right bass" and "right notes" as easier settings; the fix reason is always spelled out |
 | 2026-09-24 | Head to Keys: prompt drill self-rating is 1–5 (4+ counts as "kept it"); the measured number is first-note latency from the downbeat; click and soft backing chords on by default |
 | 2026-09-24 | Head to Keys: hum-then-play is built despite the poor mic, with confidence and level gates in Settings; any octave accepted by default (voice register ≠ hands) |
+| 2026-09-24 | Tab 6 widened to Practice & Learn: Calendar + Progress + Learn. Completion is derived from logged attempts, never stored; plan items link straight into their mode via query strings |
+| 2026-09-24 | Starter programme is eight weeks with a light seventh day; applying a week overwrites those seven days. Lessons are static content in the repo (`src/lib/learn/content.ts`), edited like code |

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import { getEngine } from "@/lib/audio/engine";
-import { useUiStore } from "@/lib/ui-store";
+import { useUiStore, type TranscribeTabId } from "@/lib/ui-store";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,7 +13,8 @@ import { ShadowMode } from "@/components/transcribe/shadow-mode";
 import { cn } from "@/lib/utils";
 
 export function TranscribeTabs() {
-  const [tab, setTab] = useState<"phrases" | "shadow">("phrases");
+  const tab = useUiStore((s) => s.transcribeTab);
+  const setTab = useUiStore((s) => s.setTranscribeTab);
   const settingsOpen = useUiStore((s) => s.transcribeSettingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setTranscribeSettingsOpen);
 
@@ -21,7 +22,10 @@ export function TranscribeTabs() {
     getEngine()
       .checkSamples()
       .catch(() => {});
-  }, []);
+    // /transcribe?tab=shadow (from the practice calendar)
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t === "shadow" || t === "phrases") setTab(t);
+  }, [setTab]);
 
   return (
     <div className={cn("grid gap-4", settingsOpen ? "lg:grid-cols-[340px_1fr]" : "grid-cols-1")}>
@@ -35,7 +39,7 @@ export function TranscribeTabs() {
           <h1 className="text-xl font-semibold">Hear It, Play It</h1>
           <p className="text-sm text-muted-foreground">The app plays music it knows note for note. You play it back on the USB piano. It grades and shows the diff.</p>
         </div>
-        <Tabs value={tab} onValueChange={(v) => setTab(String(v) as "phrases" | "shadow")}>
+        <Tabs value={tab} onValueChange={(v) => setTab(String(v) as TranscribeTabId)}>
           <div className="flex items-center gap-2">
             <Tooltip>
               <TooltipTrigger

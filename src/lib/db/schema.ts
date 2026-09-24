@@ -87,6 +87,19 @@ export const pieceProgress = sqliteTable(
 );
 
 /**
+ * One row per planned day: what to practise (PlanItem[] as JSON, see src/lib/practice/plan.ts) and notes.
+ * Completion is not stored; it is derived from `attempts` and `sessions` on that date.
+ */
+export const practicePlans = sqliteTable("practice_plans", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Local calendar day, YYYY-MM-DD. */
+  date: text("date").notNull().unique(),
+  items: text("items", { mode: "json" }).notNull(),
+  notes: text("notes").notNull().default(""),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+/**
  * Key/value store for misc persisted state (last settings, etc.).
  */
 export const settings = sqliteTable("settings", {

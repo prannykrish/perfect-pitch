@@ -13,7 +13,7 @@ const TABS: { href: string; label: string; short: string }[] = [
   { href: "/mistakes", label: "Find the Mistake", short: "Mistakes" },
   { href: "/compose", label: "Head to Keys", short: "Compose" },
   { href: "/stats", label: "Stats", short: "Stats" },
-  { href: "/calendar", label: "Calendar", short: "Calendar" },
+  { href: "/calendar", label: "Practice & Learn", short: "Practice" },
 ];
 
 export function AppNav() {

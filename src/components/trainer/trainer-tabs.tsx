@@ -39,6 +39,12 @@ export function TrainerTabs() {
       .catch(() => {});
   }, []);
 
+  // /trainer?mode=chords (from the practice calendar) opens that mode.
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get("mode");
+    if (m && MODES.some((x) => x.id === m)) setMode(m as TrainerMode);
+  }, [setMode]);
+
   return (
     <div className={cn("grid gap-4", settingsOpen ? "lg:grid-cols-[320px_1fr]" : "grid-cols-1")}>
       {settingsOpen && (

@@ -15,6 +15,13 @@
       "when": 1790273999044,
       "tag": "0001_pieces",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790285231616,
+      "tag": "0002_practice_plans",
+      "breakpoints": true
     }
   ]
 }

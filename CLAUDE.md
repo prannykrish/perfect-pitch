@@ -32,6 +32,10 @@ Every trainer mode is a small adapter (`generate / play / score / log / record`)
 
 `src/lib/music/score.ts` is the beats-based score model; `src/lib/trainer/grade.ts` aligns a performance to a reference with edit distance (run `npm run selftest` after touching it); `src/lib/trainer/phrase-gen.ts` writes practice phrases; `src/lib/transcribe/` holds settings and loaders. Bundled chorales come from `npm run pieces` into `public/pieces/bach/` (committed). Uploaded MIDI lives in the `pieces` table as JSON.
 
+## Find the Mistake (Phase 5), Head to Keys (Phase 6), Practice & Learn (Phase 7)
+
+`src/lib/mistakes/` (types, pure planting in `plant.ts`, material builders) with `src/components/mistakes/`. `src/lib/compose/` (theory tasks and grading in `theory.ts`, prompts, hum segmentation, mic pitch tracking) with `src/components/compose/`. `src/lib/practice/` (plans + starter programme in `plan.ts`, skills in `skills.ts`), `src/lib/learn/content.ts` (lessons + glossary, static data) with `src/components/practice/`. Each has a self-test script under `scripts/`; `npm run selftest` runs them all. Plan items open a tab with `?mode=` / `?tab=` query strings handled in the tab layouts.
+
 ## Conventions
 
 - MIDI numbers are the canonical note representation (60 = C4). Helpers in `src/lib/music/notes.ts`.
@@ -52,4 +56,5 @@ npm run pieces       # rebuild the bundled Bach chorales from the JSB dataset
 npm run selftest     # generator + grader checks (no browser needed)
 npm run db:generate  # after schema changes
 npm run db:studio    # browse the SQLite db
+npm run db:reset-stats  # wipe attempts / sessions / chunk progress (--all also wipes takes, uploads, plans)
 ```
