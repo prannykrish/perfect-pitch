@@ -6,6 +6,7 @@
  * position to harmonisation. Right → moves on by itself; wrong → holds until Space / Enter.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimKey } from "@/lib/keys";
 import { CheckIcon, EyeIcon, PlayIcon, RotateCcwIcon, SquareIcon, Volume2Icon, XIcon } from "lucide-react";
 import { getEngine } from "@/lib/audio/engine";
 import { chordLabel } from "@/lib/music/chords";
@@ -13,6 +14,7 @@ import { noteName } from "@/lib/music/notes";
 import { useComposeSettings } from "@/lib/compose/settings";
 import { generateTheoryTask, gradeTheoryTask, groupChords, referenceNotes, THEORY_KIND_LABELS, type PlayedEvent, type TheoryGrade, type TheoryTask } from "@/lib/compose/theory";
 import { endSession, logAttempt, startSession } from "@/lib/db/actions";
+import { levelTags } from "@/lib/practice/level-run";
 import { useLatest } from "@/lib/hooks/use-latest";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -126,6 +128,7 @@ export function TheoryDrill() {
         score: gaveUp ? 0 : g.score,
         responseMs: firstNoteMs ?? performance.now() - shownAt.current,
         replays: 0,
+        ...levelTags("compose"),
       }).catch(() => {});
       if (g.correct && !gaveUp && s.theoryAutoProceed) autoTimer.current = setTimeout(() => next(), 900);
     },
@@ -167,7 +170,7 @@ export function TheoryDrill() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const p = phaseRef.current;
       if (e.code === "Space") {
-        e.preventDefault();
+        claimKey(e);
         if (p === "idle" || p === "ended") start();
         else if (p === "graded") next();
       } else if (e.key === "Enter") {

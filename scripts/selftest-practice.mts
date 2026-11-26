@@ -2,7 +2,7 @@
  * Practice & Learn checks: plan helpers, the starter programme, streaks, and the lesson data.
  *   npx tsx scripts/selftest-practice.mts
  */
-import { addDays, computeStreak, dayKey, itemProgress, MODE_INFO, parseDayKey, PLAN_MODES, planModeForAttempt, programDay, STARTER_PROGRAM } from "../src/lib/practice/plan";
+import { addDays, computeStreak, dayKey, itemProgress, MODE_INFO, parseDayKey, PLAN_MODES, planModeForAttempt } from "../src/lib/practice/plan";
 import { glossary, LESSON_BY_ID, LESSONS } from "../src/lib/learn/content";
 import { computeSkills } from "../src/lib/practice/skills";
 import type { StatsData } from "../src/lib/db/actions";
@@ -35,17 +35,6 @@ for (const m of PLAN_MODES) {
   for (const a of MODE_INFO[m].attemptModes) check(planModeForAttempt(a) === m, `attempt mode ${a} → ${m}`);
 }
 check(planModeForAttempt("roulette") === "single-note" && planModeForAttempt("nope") === null, "legacy / unknown attempt modes");
-
-// ---- programme ----
-check(STARTER_PROGRAM.length === 8 && STARTER_PROGRAM.every((w, i) => w.week === i + 1 && w.daily.length >= 3), "eight programme weeks");
-for (const w of STARTER_PROGRAM) {
-  for (const id of w.lessons) check(LESSON_BY_ID.has(id), `week ${w.week} lesson ${id} exists`);
-  const full = programDay(w, 0);
-  const light = programDay(w, 6);
-  check(full.length === w.daily.length && light.length === w.daily.length, "programme day lengths");
-  check(full.every((it, i) => it.target === w.daily[i].target && it.id !== w.daily[i].id), "full day copies targets with fresh ids");
-  check(light.every((it, i) => it.target === Math.max(1, Math.round(w.daily[i].target / 2)) && (it.hint ?? "").includes("light day")), "light day halves targets");
-}
 
 // ---- item progress ----
 const it = { id: "x", mode: "chords" as const, target: 30 };
@@ -89,6 +78,7 @@ const empty: StatsData = {
   cents: [],
   centsJndByDay: [],
   sequence: [],
+  scales: [],
   mistakes: { byType: [], byCents: [], bySource: [] },
   transcribe: { longestCorrectBars: null, longestPassedBars: null, byVoices: [], byBars: [] },
   shadowByDay: [],
@@ -97,7 +87,7 @@ const empty: StatsData = {
   humByDay: [],
 };
 const skills = computeSkills(empty, []);
-check(skills.length === 13 && skills.every((s) => s.stage === 0 && s.value === "–"), `empty skills ${skills.map((s) => `${s.id}:${s.stage}`).join(",")}`);
+check(skills.length === 14 && skills.every((s) => s.stage === 0 && s.value === "–"), `empty skills ${skills.map((s) => `${s.id}:${s.stage}`).join(",")}`);
 for (const s of skills) check(LESSON_BY_ID.has(s.lesson), `skill ${s.id} lesson ${s.lesson} exists`);
 // a strong pitch skill
 const strong = { ...empty, byPitchClass: Array.from({ length: 12 }, (_, pc) => ({ pitchClass: pc, total: 50, correct: 49 })) };

@@ -22,6 +22,8 @@ export type ChordAnswer = "root-quality" | "notes";
 export type ChordPlayback = "blocked" | "arp-then-blocked" | "arp";
 export type NotesOrder = "any" | "bottom-up";
 export type CentsVariant = "single" | "pair" | "chord";
+export type ScaleVariant = "run" | "melody" | "both";
+export type ScaleDirection = "asc" | "desc" | "both" | "random";
 
 export interface TrainerSettings {
   /** Which of the 12 pitch classes may appear. Index 0 = C. */
@@ -70,6 +72,8 @@ export interface TrainerSettings {
   chordKind: ChordKind;
   chordAnswer: ChordAnswer;
   chordCategories: ChordCategory[];
+  /** Quality ids to draw from inside the chosen categories; empty = every quality. Written by the difficulty dial. */
+  chordQualities: string[];
   chordInversions: boolean;
   chordAskInversion: boolean;
   chordVoicings: Voicing[];
@@ -85,6 +89,17 @@ export interface TrainerSettings {
   centsMax: number;
   /** Probability that a "single" cents question is perfectly in tune. */
   centsInTuneChance: number;
+
+  // ----- scales & modes (hear it, name it) -----
+  scaleVariant: ScaleVariant;
+  scaleDirection: ScaleDirection;
+  /** Enabled scale ids; empty = all. */
+  scaleSet: string[];
+  /** Ask for the tonic as well as the scale type. */
+  scaleAskTonic: boolean;
+  scaleRunNoteMs: number;
+  scaleMelodyNotes: number;
+  scaleMelodyBpm: number;
 }
 
 export const DEFAULT_TRAINER_SETTINGS: TrainerSettings = {
@@ -123,6 +138,7 @@ export const DEFAULT_TRAINER_SETTINGS: TrainerSettings = {
   chordKind: "chords",
   chordAnswer: "root-quality",
   chordCategories: ["triads", "sevenths"],
+  chordQualities: [],
   chordInversions: true,
   chordAskInversion: false,
   chordVoicings: ["closed"],
@@ -136,6 +152,14 @@ export const DEFAULT_TRAINER_SETTINGS: TrainerSettings = {
   centsMin: 5,
   centsMax: 50,
   centsInTuneChance: 0.15,
+
+  scaleVariant: "both",
+  scaleDirection: "random",
+  scaleSet: [],
+  scaleAskTonic: true,
+  scaleRunNoteMs: 280,
+  scaleMelodyNotes: 8,
+  scaleMelodyBpm: 100,
 };
 
 interface TrainerSettingsStore {

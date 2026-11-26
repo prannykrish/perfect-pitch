@@ -22,7 +22,7 @@ export function DailyRepsChart({ data }: { data: DayPoint[] }) {
   const config: ChartConfig = { total: { label: "Reps", color: "var(--series-1)" } };
   return (
     <ChartContainer config={config} className="h-56 w-full aspect-auto">
-      <BarChart data={data} margin={{ left: -12, right: 8, top: 8 }}>
+      <BarChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
         <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
         <XAxis dataKey="day" tickFormatter={shortDay} {...AXIS} minTickGap={24} />
         <YAxis {...AXIS} allowDecimals={false} width={40} />
@@ -39,7 +39,7 @@ export function DailyAccuracyChart({ data }: { data: DayPoint[] }) {
   const config: ChartConfig = { accuracy: { label: "Accuracy %", color: "var(--series-1)" } };
   return (
     <ChartContainer config={config} className="h-56 w-full aspect-auto">
-      <LineChart data={rows} margin={{ left: -12, right: 12, top: 8 }}>
+      <LineChart data={rows} margin={{ left: 0, right: 12, top: 8 }}>
         <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
         <XAxis dataKey="day" tickFormatter={shortDay} {...AXIS} minTickGap={24} />
         <YAxis domain={[0, 100]} {...AXIS} width={40} />
@@ -78,7 +78,7 @@ export function CategoryAccuracyChart({ data, height = 224 }: { data: CategoryPo
   const config: ChartConfig = { accuracy: { label: "Accuracy %", color: "var(--series-1)" } };
   return (
     <ChartContainer config={config} className="w-full aspect-auto" style={{ height }}>
-      <BarChart data={rows} margin={{ left: -12, right: 8, top: 8 }}>
+      <BarChart data={rows} margin={{ left: 0, right: 8, top: 8 }}>
         <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
         <XAxis dataKey="label" {...AXIS} interval={0} />
         <YAxis domain={[0, 100]} {...AXIS} width={40} />
@@ -97,7 +97,7 @@ export function DailyPercentChart({ data, label }: { data: { day: string; value:
   const config: ChartConfig = { value: { label, color: "var(--series-1)" } };
   return (
     <ChartContainer config={config} className="h-56 w-full aspect-auto">
-      <LineChart data={data} margin={{ left: -12, right: 12, top: 8 }}>
+      <LineChart data={data} margin={{ left: 0, right: 12, top: 8 }}>
         <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
         <XAxis dataKey="day" tickFormatter={shortDay} {...AXIS} minTickGap={24} />
         <YAxis domain={[0, 100]} {...AXIS} width={40} />
@@ -130,7 +130,7 @@ export function JndChart({ data }: { data: { day: string; jnd: number | null }[]
   const config: ChartConfig = { jnd: { label: "Cents", color: "var(--series-1)" } };
   return (
     <ChartContainer config={config} className="h-56 w-full aspect-auto">
-      <LineChart data={rows} margin={{ left: -12, right: 12, top: 8 }}>
+      <LineChart data={rows} margin={{ left: 0, right: 12, top: 8 }}>
         <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
         <XAxis dataKey="day" tickFormatter={shortDay} {...AXIS} minTickGap={24} />
         <YAxis domain={[0, 50]} {...AXIS} width={40} />

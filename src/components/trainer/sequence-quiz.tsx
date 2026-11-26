@@ -166,6 +166,7 @@ export function SequenceQuiz() {
   return (
     <QuizShell
       quiz={quiz}
+      tallFeedback
       title="Sequence"
       idleText={`${settings.seqLength} notes in a row. Answer them in order.`}
       questionText={`Enter the ${question?.notes.length ?? settings.seqLength} notes in order.`}

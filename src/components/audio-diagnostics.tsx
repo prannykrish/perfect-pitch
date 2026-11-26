@@ -5,9 +5,12 @@ import { CheckIcon, XIcon, MinusIcon, RefreshCwIcon, CopyIcon } from "lucide-rea
 import { toast } from "sonner";
 import { getEngine, useEngineStore } from "@/lib/audio/engine";
 import { instrumentLabel } from "@/lib/audio/instruments";
+import { useAudioPrefs } from "@/lib/audio/prefs";
 import type { ProbeResult } from "@/lib/audio/sample-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 
 function Row({ label, r }: { label: string; r: ProbeResult }) {
   const icon = r.ok ? (
@@ -41,6 +44,8 @@ export function AudioDiagnostics() {
   const checking = useEngineStore((s) => s.samplesChecking);
   const vendored = useEngineStore((s) => s.vendored);
   const broken = useEngineStore((s) => s.broken);
+  const reinforceBass = useAudioPrefs((s) => s.reinforceBass);
+  const setReinforceBass = useAudioPrefs((s) => s.setReinforceBass);
   const [open, setOpen] = useState(false);
   const brokenList = Object.entries(broken);
 
@@ -53,10 +58,17 @@ export function AudioDiagnostics() {
 
   return (
     <div className="flex flex-col gap-2">
+      <Label className="gap-2 text-xs font-normal">
+        <Switch size="sm" checked={reinforceBass} onCheckedChange={setReinforceBass} />
+        Reinforce the piano’s lowest keys (A0–G♭1)
+      </Label>
+      <p className="text-[11px] text-muted-foreground">The free piano’s bottom ten samples have almost no fundamental, so they sound like the octave above. This adds the fundamental back at a natural level. Off = the raw samples.</p>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium">Streamed instruments</span>
         {checking ? (
           <Badge variant="outline" className="animate-pulse">checking…</Badge>
+        ) : samples?.reason === "phone" ? (
+          <Badge variant="outline">laptop only</Badge>
         ) : samples ? (
           <Badge variant={samples.status === "ok" ? "default" : "destructive"}>
             {samples.status === "ok" ? `available (${samples.format === "ogg" ? "Opus" : "AAC"})` : "unavailable"}
@@ -74,7 +86,8 @@ export function AudioDiagnostics() {
       {vendored.length > 0 && (
         <p className="text-xs text-muted-foreground">{vendored.length} streamed instruments are vendored locally as mp3 and always work.</p>
       )}
-      {samples && samples.status !== "ok" && (
+      {samples && samples.status !== "ok" && samples.reason === "phone" && <p className="text-xs text-muted-foreground">{samples.detail}</p>}
+      {samples && samples.status !== "ok" && samples.reason !== "phone" && (
         <p className="text-xs text-muted-foreground">
           {samples.detail} Try a regular Chrome or Edge window, or run <code className="font-mono">npm run samples:streamed</code> to convert them to local mp3.
         </p>

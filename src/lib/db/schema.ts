@@ -33,12 +33,16 @@ export const attempts = sqliteTable(
     targetOctave: integer("target_octave"),
     answerPitchClass: integer("answer_pitch_class"),
     answerOctave: integer("answer_octave"),
+    /** Set when the rep was done from a level's drill with that drill's settings (src/lib/practice/levels.ts). */
+    levelId: text("level_id"),
+    drillId: text("drill_id"),
   },
   (t) => [
     index("attempts_created_at_idx").on(t.createdAt),
     index("attempts_mode_idx").on(t.mode),
     index("attempts_instrument_idx").on(t.instrumentId),
     index("attempts_session_idx").on(t.sessionId),
+    index("attempts_drill_idx").on(t.drillId, t.createdAt),
   ]
 );
 

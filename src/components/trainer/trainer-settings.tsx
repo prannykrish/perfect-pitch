@@ -16,6 +16,7 @@ import {
 import { CHORD_CATEGORY_LABELS, VOICING_LABELS, type ChordCategory, type Voicing } from "@/lib/music/chords";
 import { INTERVALS } from "@/lib/music/intervals";
 import { MIDI_MAX, MIDI_MIN, noteName, PITCH_CLASS_SHORT, randomInt, shuffle } from "@/lib/music/notes";
+import { SCALE_CATEGORY_LABELS, scalesByCategory } from "@/lib/music/scales";
 import {
   useTrainerSettings,
   type AnswerMode,
@@ -30,6 +31,8 @@ import {
   type NotesOrder,
   type PoolMode,
   type ReplayLimit,
+  type ScaleDirection,
+  type ScaleVariant,
 } from "@/lib/trainer/settings";
 import type { TrainerMode } from "@/components/trainer/trainer-tabs";
 import { Badge } from "@/components/ui/badge";
@@ -47,11 +50,26 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { InstrumentSelect } from "@/components/instrument-select";
 import { MidiPanel } from "@/components/midi-panel";
 import { AudioDiagnostics } from "@/components/audio-diagnostics";
+import { DifficultyDial } from "@/components/practice/difficulty-dial";
+import { PianoPrefsFields } from "@/components/piano-prefs-fields";
 
 const INSTRUMENT_MODES: Record<InstrumentMode, string> = {
   fixed: "One instrument",
   "random-question": "Random instrument every question",
   "random-note": "Random instrument every note",
+};
+
+const SCALE_VARIANTS: Record<ScaleVariant, string> = {
+  run: "Scale runs only",
+  melody: "Melodies only",
+  both: "Runs and melodies",
+};
+
+const SCALE_DIRECTIONS: Record<ScaleDirection, string> = {
+  random: "Runs go up, down or both (random)",
+  asc: "Runs go up",
+  desc: "Runs go down",
+  both: "Runs go up and back down",
 };
 
 const REPLAY_LIMITS: Record<ReplayLimit, string> = {
@@ -153,6 +171,9 @@ export function TrainerSettingsPanel({ mode, disabled = false }: { mode: Trainer
         <CardTitle>Settings</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <DifficultyDial id={mode} />
+        <Separator />
+
         {/* ---------- mode specific ---------- */}
         {mode === "sequence" && (
           <section className="flex flex-col gap-2">
@@ -311,6 +332,46 @@ export function TrainerSettingsPanel({ mode, disabled = false }: { mode: Trainer
           </section>
         )}
 
+        {mode === "scales" && (
+          <section className="flex flex-col gap-2">
+            <Label>Scales & modes</Label>
+            <SelectField value={s.scaleVariant} items={SCALE_VARIANTS} onChange={(v) => update({ scaleVariant: v })} />
+            {s.scaleVariant !== "melody" && <SelectField value={s.scaleDirection} items={SCALE_DIRECTIONS} onChange={(v) => update({ scaleDirection: v })} />}
+            <Label className="gap-2">
+              <Switch size="sm" checked={s.scaleAskTonic} onCheckedChange={(v) => update({ scaleAskTonic: v })} />
+              Ask for the tonic too (buttons, piano or keyboard)
+            </Label>
+            {s.scaleVariant !== "melody" && <SliderField label="Run speed" value={s.scaleRunNoteMs} display={`${s.scaleRunNoteMs} ms per note`} min={150} max={600} step={10} onChange={(v) => update({ scaleRunNoteMs: v })} />}
+            {s.scaleVariant !== "run" && (
+              <>
+                <SliderField label="Melody length" value={s.scaleMelodyNotes} display={`${s.scaleMelodyNotes} notes`} min={5} max={14} onChange={(v) => update({ scaleMelodyNotes: v })} />
+                <SliderField label="Melody tempo" value={s.scaleMelodyBpm} display={`${s.scaleMelodyBpm} bpm`} min={60} max={160} step={2} onChange={(v) => update({ scaleMelodyBpm: v })} />
+              </>
+            )}
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground">Scales to ask (none ticked = all)</Label>
+              {s.scaleSet.length > 0 && (
+                <Button variant="ghost" size="xs" onClick={() => update({ scaleSet: [] })}>
+                  All
+                </Button>
+              )}
+            </div>
+            {scalesByCategory([]).map((g) => (
+              <div key={g.category} className="flex flex-col gap-1">
+                <span className="text-[11px] text-muted-foreground">{SCALE_CATEGORY_LABELS[g.category]}</span>
+                <ToggleGroup multiple variant="outline" size="sm" className="flex-wrap" value={s.scaleSet} onValueChange={(v) => update({ scaleSet: v as string[] })}>
+                  {g.items.map((sc) => (
+                    <ToggleGroupItem key={sc.id} value={sc.id} className="h-6 px-2 text-xs" title={sc.tell}>
+                      {sc.short}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </div>
+            ))}
+            <Separator />
+          </section>
+        )}
+
         {/* ---------- instrument ---------- */}
         <section className="flex flex-col gap-2">
           <Label>Instrument</Label>
@@ -456,13 +517,16 @@ export function TrainerSettingsPanel({ mode, disabled = false }: { mode: Trainer
           )}
           <Label className="gap-2">
             <Switch size="sm" checked={s.keyboardShortcuts} onCheckedChange={(v) => update({ keyboardShortcuts: v })} />
-            Computer keyboard shortcuts
+            Answer with letter keys (A W S E D F T G Y H U J, octave Z / X / 0–8)
           </Label>
+          <p className="touch:hidden text-xs text-muted-foreground">Space (start, hear again, hear next), Enter, R, C and Esc always work.</p>
           <Label className="gap-2">
             <Switch size="sm" checked={s.midiInput} onCheckedChange={(v) => update({ midiInput: v })} />
             Answer on the USB piano
           </Label>
           {s.midiInput && <MidiPanel />}
+          <Label className="mt-1 text-xs text-muted-foreground">On-screen piano</Label>
+          <PianoPrefsFields />
         </section>
 
         <Separator />
@@ -478,7 +542,7 @@ export function TrainerSettingsPanel({ mode, disabled = false }: { mode: Trainer
             <Switch size="sm" checked={s.autoProceed} onCheckedChange={(v) => update({ autoProceed: v })} />
             Auto proceed after a right answer
           </Label>
-          <p className="text-xs text-muted-foreground">A wrong answer always waits: read the correction, then Space, Enter or Hear next.</p>
+          <p className="text-xs text-muted-foreground">A wrong answer always waits: read the correction, then Space (or click Hear next).</p>
           <Label>Replays</Label>
           <SelectField value={s.replayLimit} items={REPLAY_LIMITS} onChange={(v) => update({ replayLimit: v })} />
           <SliderField label="Note length" value={s.noteDurationMs} display={`${(s.noteDurationMs / 1000).toFixed(1)}s`} min={200} max={4000} step={100} onChange={(v) => update({ noteDurationMs: v })} />

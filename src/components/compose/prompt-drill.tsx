@@ -6,6 +6,7 @@
  * yourself. The measured number is the latency from the downbeat to your first note.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimKey } from "@/lib/keys";
 import { toast } from "sonner";
 import { PlayIcon, SaveIcon, SquareIcon, Volume2Icon } from "lucide-react";
 import { getEngine } from "@/lib/audio/engine";
@@ -18,6 +19,7 @@ import { useComposeSettings } from "@/lib/compose/settings";
 import { backingNotes, generatePrompt, type Prompt } from "@/lib/compose/prompt-gen";
 import { keyName } from "@/lib/compose/theory";
 import { endSession, logAttempt, saveRecording, startSession } from "@/lib/db/actions";
+import { levelTags } from "@/lib/practice/level-run";
 import { useLatest } from "@/lib/hooks/use-latest";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -218,6 +220,7 @@ export function PromptDrill() {
         score: r / 5,
         responseMs: Math.max(0, lat ?? 0),
         replays: 0,
+        ...levelTags("compose"),
       }).catch(() => {});
     },
     [promptRef, phaseRef, settingsRef]
@@ -243,7 +246,7 @@ export function PromptDrill() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const p = phaseRef.current;
       if (e.code === "Space" || e.key === "Enter") {
-        e.preventDefault();
+        claimKey(e);
         if (p === "idle" || p === "ended") start();
         else if (p === "rated") next();
         else if (p === "review" && e.key === "Enter") playBack();

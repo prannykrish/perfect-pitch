@@ -5,6 +5,7 @@
 import { getInstrument } from "@/lib/audio/instruments";
 import { intervalShort } from "@/lib/music/intervals";
 import { chordQuality } from "@/lib/music/chords";
+import { SCALE_DEFS, scaleDef } from "@/lib/music/scales";
 import type { StatsData } from "@/lib/db/actions";
 import { LEVEL_LABELS } from "@/lib/compose/theory";
 import { PROBLEM_LABELS, type ProblemType } from "@/lib/mistakes/types";
@@ -226,6 +227,43 @@ export function computeSkills(all: StatsData, modeDays: ModeDay[]): SkillStatus[
       trend: trendFor(modeDays, ["chords"], cutoff, earlier),
       href: "/trainer?mode=chords",
       lesson: "chords",
+    });
+  }
+
+  // ---- scales and modes ----
+  {
+    const perScale = new Map<string, { total: number; correct: number }>();
+    let melodyT = 0;
+    let melodyC = 0;
+    for (const r of all.scales) {
+      const e = perScale.get(r.scaleId) ?? { total: 0, correct: 0 };
+      e.total += r.total;
+      e.correct += r.correct;
+      perScale.set(r.scaleId, e);
+      if (r.variant === "melody") {
+        melodyT += r.total;
+        melodyC += r.correct;
+      }
+    }
+    const total = [...perScale.values()].reduce((a, e) => a + e.total, 0);
+    const correct = [...perScale.values()].reduce((a, e) => a + e.correct, 0);
+    const acc = pct(correct, total);
+    const known = [...perScale.values()].filter((e) => e.total >= 5 && pct(e.correct, e.total) >= 0.85).length;
+    const weakest = [...perScale.entries()].filter(([, e]) => e.total >= 5).sort((a, b) => pct(a[1].correct, a[1].total) - pct(b[1].correct, b[1].total))[0];
+    const stage: 0 | 1 | 2 | 3 = total === 0 ? 0 : known >= 12 ? 3 : known >= 6 ? 2 : 1;
+    out.push({
+      id: "scales",
+      name: "Scales and modes",
+      area: "harmony",
+      what: "Hear a run or a melody and name the scale it lives in, and its home note.",
+      value: total ? `${known} / ${SCALE_DEFS.length}` : "–",
+      detail: total ? `${fmtPct(acc)} over ${total} questions${melodyT ? ` · melodies ${fmtPct(pct(melodyC, melodyT))}` : ""}${weakest ? ` · weakest ${scaleDef(weakest[0])?.name ?? weakest[0]} at ${fmtPct(pct(weakest[1].correct, weakest[1].total))}` : ""}` : "Run Scales & modes in the trainer.",
+      stage,
+      progress: Math.min(1, known / 12),
+      next: known < 6 ? "6 scales at 85 % (major, the minors, dorian, mixolydian)" : known < 12 ? "12 scales at 85 %, melodies included" : "Every scale from melodies alone",
+      trend: trendFor(modeDays, ["scales"], cutoff, earlier),
+      href: "/trainer?mode=scales",
+      lesson: "scales-and-modes",
     });
   }
 

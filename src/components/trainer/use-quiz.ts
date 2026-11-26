@@ -6,8 +6,11 @@
  * (generate / play / score / log) and renders its own answer UI.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimKey } from "@/lib/keys";
 import { toast } from "sonner";
 import { getEngine, isInstrumentAvailable, useEngineStore } from "@/lib/audio/engine";
+import { isTouchDevice } from "@/lib/audio/device";
+import { jumpPianoWindowToOctave } from "@/lib/piano-prefs";
 import { getInstrument, instrumentLabel } from "@/lib/audio/instruments";
 import { getMidi } from "@/lib/midi/midi";
 import { midiFrom, shuffle } from "@/lib/music/notes";
@@ -22,7 +25,8 @@ import {
   type QuizPhase,
   type Scored,
 } from "@/lib/trainer/quiz-core";
-import { endSession, getMissWeights, logAttempt, startSession, type LogAttemptInput } from "@/lib/db/actions";
+import { endSession, getMissWeights, logAttempt, markAttemptCorrect, startSession, type LogAttemptInput } from "@/lib/db/actions";
+import { levelTags } from "@/lib/practice/level-run";
 import { PC_KEYS } from "@/components/trainer/pitch-class-grid";
 
 export interface GenerateCtx {
@@ -62,6 +66,8 @@ export interface UseQuizOptions {
 }
 
 const POOL_SIZE = 6;
+/** A phone keeps only a few decoded instruments in memory (MAX_LOADED_TOUCH in engine.ts), so its pool is smaller. */
+const POOL_SIZE_TOUCH = 3;
 
 export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptions = {}) {
   const settings = useTrainerSettings((s) => s.settings);
@@ -75,12 +81,18 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
   const [scored, setScored] = useState<Scored | null>(null);
   const [history, setHistory] = useState<HistoryEntry<Q, A>[]>([]);
   const [replays, setReplays] = useState(0);
-  const [octave, setOctave] = useState(4);
+  const [octave, setOctaveState] = useState(4);
   const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
 
   const phaseRef = useLatest(phase);
   const questionRef = useLatest<Q | null>(question);
   const octaveRef = useLatest(octave);
+  /** The octave the pitch buttons answer in. Choosing one also brings the phone's piano window to it. */
+  const setOctave = useCallback((o: number) => {
+    const next = Math.min(8, Math.max(0, o));
+    setOctaveState(next);
+    jumpPianoWindowToOctave(next);
+  }, []);
   const askedAtRef = useRef(0);
   const replaysRef = useRef(0);
   const historyRef = useRef<HistoryEntry<Q, A>[]>([]);
@@ -88,6 +100,8 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
   const statsRef = useRef<MissStats>(emptyMissStats());
   const poolRef = useRef<string[]>([]);
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The last answer's log row and the miss stats from before it, so "I was right" can undo it. */
+  const lastAttemptRef = useRef<{ id: Promise<number | null>; statsBefore: MissStats } | null>(null);
 
   const engineLoading = useEngineStore((s) => s.loading);
   const answeredCount = history.length;
@@ -107,7 +121,7 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
       }
       const engineState = useEngineStore.getState();
       const candidates = candidateInstruments(s, { isAvailable: (d) => isInstrumentAvailable(d, engineState), everything });
-      const size = everything ? POOL_SIZE + 4 : POOL_SIZE;
+      const size = isTouchDevice() ? POOL_SIZE_TOUCH : everything ? POOL_SIZE + 4 : POOL_SIZE;
       if (force || poolRef.current.length === 0) {
         poolRef.current = shuffle(candidates)
           .slice(0, size)
@@ -265,13 +279,14 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
       const entry: HistoryEntry<Q, A> = { q, a, correct: result.correct, score: result.score, responseMs };
       historyRef.current = [...historyRef.current, entry];
       setHistory(historyRef.current);
+      const statsBefore = structuredClone(statsRef.current);
       ad.record?.(statsRef.current, q, a, result);
       setAnswer(a);
       setScored(result);
       setPhase("answered");
 
       const fields = ad.log(q, a, s);
-      logAttempt({
+      const id = logAttempt({
         sessionId: sessionIdRef.current,
         mode: ad.mode,
         correct: result.correct,
@@ -279,7 +294,12 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
         responseMs,
         replays: replaysRef.current,
         ...fields,
-      }).catch((err) => console.warn("logAttempt failed", err));
+        ...levelTags("trainer"),
+      }).catch((err) => {
+        console.warn("logAttempt failed", err);
+        return null;
+      });
+      lastAttemptRef.current = { id, statsBefore };
 
       // Right: move on after a short flash. Wrong: hold the feedback until Space / Enter / click.
       if (s.autoProceed && result.correct) {
@@ -288,6 +308,24 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
     },
     [questionRef, phaseRef, settingsRef, adapterRef, askNext]
   );
+
+  /** "I was right": the hand slipped. Flip the answer just given to correct, in the session and in the log. */
+  const markCorrect = useCallback(() => {
+    const last = lastAttemptRef.current;
+    const entry = historyRef.current[historyRef.current.length - 1];
+    if (phaseRef.current !== "answered" || !last || !entry || entry.correct) return;
+    lastAttemptRef.current = null;
+    historyRef.current = [...historyRef.current.slice(0, -1), { ...entry, correct: true, score: 1 }];
+    setHistory(historyRef.current);
+    // A slip says nothing about the ear, so the adaptive weighting forgets this rep.
+    statsRef.current = last.statsBefore;
+    setScored({ correct: true, score: 1 });
+    last.id
+      .then((id) => (id === null ? undefined : markAttemptCorrect(id)))
+      .catch((err) => toast.error(`Could not update the log: ${err instanceof Error ? err.message : String(err)}`));
+    const s = settingsRef.current;
+    if (s.autoProceed) autoTimer.current = setTimeout(() => askNext(), s.correctPauseMs);
+  }, [phaseRef, settingsRef, askNext]);
 
   // ----- silent instrument: the engine drops it; replace the question it was asked in -----
   useEffect(
@@ -313,15 +351,17 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
   }, [settings.midiInput, settingsRef, phaseRef, onNoteInputRef]);
 
   // ----- keyboard shortcuts -----
+  // The flow keys (Space / Enter / R / C / Esc) always work: he answers on the piano and should never
+  // have to reach for the trackpad. The "keyboard shortcuts" switch only governs answering with
+  // letter keys and the octave keys.
   useEffect(() => {
-    if (!settings.keyboardShortcuts) return;
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
       if (e.code === "Space") {
-        e.preventDefault();
+        claimKey(e);
         const p = phaseRef.current;
         if (p === "idle" || p === "ended") start();
         else if (p === "answered") askNext();
@@ -331,6 +371,13 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
       if (key === "R") {
         e.preventDefault();
         hearAgain();
+        return;
+      }
+      if (key === "C") {
+        if (phaseRef.current === "answered") {
+          e.preventDefault();
+          markCorrect();
+        }
         return;
       }
       if (key === "Enter") {
@@ -344,12 +391,13 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
         if (phaseRef.current === "question" || phaseRef.current === "answered") finish();
         return;
       }
+      if (!settingsRef.current.keyboardShortcuts) return;
       if (key === "Z") {
-        setOctave((o) => Math.max(0, o - 1));
+        setOctave(octaveRef.current - 1);
         return;
       }
       if (key === "X") {
-        setOctave((o) => Math.min(8, o + 1));
+        setOctave(octaveRef.current + 1);
         return;
       }
       if (/^[0-8]$/.test(key)) {
@@ -364,7 +412,7 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settings.keyboardShortcuts, start, askNext, hearAgain, finish, phaseRef, octaveRef, onNoteInputRef]);
+  }, [start, askNext, hearAgain, markCorrect, finish, setOctave, phaseRef, octaveRef, onNoteInputRef, settingsRef]);
 
   useEffect(() => () => clearTimer(), []);
 
@@ -388,6 +436,7 @@ export function useQuiz<Q, A>(adapter: QuizModeAdapter<Q, A>, opts: UseQuizOptio
     hearAgain,
     finish,
     submit,
+    markCorrect,
     inQuiz,
     answeredCount,
     correctCount,

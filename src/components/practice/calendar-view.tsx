@@ -8,11 +8,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon, PlusIcon, Trash2Icon, WandSparklesIcon } from "lucide-react";
-import { deletePlan, getPracticeRange, getRepsByDay, savePlan, savePlans, type PracticeRange } from "@/lib/db/actions";
-import { addDays, computeStreak, dayKey, itemProgress, MODE_INFO, newItemId, parseDayKey, PLAN_MODES, planModeForAttempt, programDay, STARTER_PROGRAM, todayKey, type PlanItem, type PlanMode } from "@/lib/practice/plan";
-import { LESSON_BY_ID } from "@/lib/learn/content";
-import { useUiStore } from "@/lib/ui-store";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon, FlagIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { deletePlan, getDrillRepsOnDay, getPracticeRange, getRepsByDay, savePlan, type PracticeRange } from "@/lib/db/actions";
+import { addDays, computeStreak, dayKey, itemProgress, MODE_INFO, newItemId, parseDayKey, PLAN_MODES, planModeForAttempt, todayKey, type PlanItem, type PlanMode } from "@/lib/practice/plan";
+import type { DrillDef, LevelDef } from "@/lib/practice/levels";
+import { LevelCard } from "@/components/practice/level-card";
+import { LadderRoadmap } from "@/components/practice/ladder-roadmap";
+import { useLevelData, type LevelPlanRow } from "@/components/practice/use-level-data";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,12 +33,24 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 interface DayInfo {
   reps: number;
   correct: number;
+  /** Reps that came from a level drill. */
+  levelReps: number;
   byMode: Partial<Record<PlanMode, number>>;
   minutes: number;
   items: PlanItem[];
   notes: string;
   planned: number;
   complete: number;
+}
+
+/** The level's plan as it applies to one calendar day. */
+interface LevelDayPlan {
+  level: LevelDef;
+  rows: LevelPlanRow[];
+  /** Tagged reps per drill on that day. */
+  done: Map<string, number>;
+  isToday: boolean;
+  isPast: boolean;
 }
 
 function monthStart(d: Date) {
@@ -49,7 +63,6 @@ export function CalendarView() {
   const [range, setRange] = useState<PracticeRange | null>(null);
   const [heat, setHeat] = useState<{ day: string; total: number; correct: number }[]>([]);
   const [reloadTick, setReloadTick] = useState(0);
-  const setPracticeTab = useUiStore((s) => s.setPracticeTab);
 
   const from = useMemo(() => dayKey(new Date(month.getFullYear(), month.getMonth(), 1 - 7, 12)), [month]);
   const to = useMemo(() => dayKey(new Date(month.getFullYear(), month.getMonth() + 1, 7, 12)), [month]);
@@ -86,7 +99,7 @@ export function CalendarView() {
     const get = (d: string) => {
       let v = map.get(d);
       if (!v) {
-        v = { reps: 0, correct: 0, byMode: {}, minutes: 0, items: [], notes: "", planned: 0, complete: 0 };
+        v = { reps: 0, correct: 0, levelReps: 0, byMode: {}, minutes: 0, items: [], notes: "", planned: 0, complete: 0 };
         map.set(d, v);
       }
       return v;
@@ -100,6 +113,7 @@ export function CalendarView() {
         if (pm) v.byMode[pm] = (v.byMode[pm] ?? 0) + r.total;
       }
       for (const m of range.minutes) get(m.day).minutes += m.minutes;
+      for (const l of range.levelDays) get(l.day).levelReps += l.total;
       for (const p of range.plans) {
         const v = get(p.date);
         v.items = p.items as PlanItem[];
@@ -113,7 +127,24 @@ export function CalendarView() {
     return map;
   }, [range]);
 
-  const selectedInfo: DayInfo = days.get(selected) ?? { reps: 0, correct: 0, byMode: {}, minutes: 0, items: [], notes: "", planned: 0, complete: 0 };
+  const selectedInfo: DayInfo = days.get(selected) ?? { reps: 0, correct: 0, levelReps: 0, byMode: {}, minutes: 0, items: [], notes: "", planned: 0, complete: 0 };
+
+  // ----- the level's plan for the selected day (same data as the level card) -----
+  const levelData = useLevelData();
+  const [dayDrillReps, setDayDrillReps] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    getDrillRepsOnDay(selected)
+      .then((rows) => {
+        if (!cancelled) setDayDrillReps(new Map(rows.map((r) => [r.drillId, r.total])));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, reloadTick, levelData.today]);
+  const todayK = todayKey();
+  const levelPlan: LevelDayPlan | null = levelData.status ? { level: levelData.level, rows: levelData.plan, done: selected === todayK ? levelData.today : dayDrillReps, isToday: selected === todayK, isPast: selected < todayK } : null;
 
   // ----- saving -----
   const persist = useCallback(
@@ -127,21 +158,6 @@ export function CalendarView() {
       }
     },
     [reload]
-  );
-
-  const applyWeek = useCallback(
-    async (weekIndex: number) => {
-      const week = STARTER_PROGRAM[weekIndex];
-      const rows = Array.from({ length: 7 }, (_, i) => ({ date: addDays(selected, i), items: programDay(week, i), notes: i === 0 ? `Week ${week.week}: ${week.title}. ${week.focus}` : "" }));
-      try {
-        await savePlans(rows);
-        toast.success(`Week ${week.week} planned from ${selected}`);
-        reload();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [selected, reload]
   );
 
   // ----- grid -----
@@ -162,6 +178,8 @@ export function CalendarView() {
 
   return (
     <div className="flex flex-col gap-4">
+      <LevelCard data={levelData} />
+      <LadderRoadmap data={levelData} />
       <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
         <Card size="sm">
           <CardHeader>
@@ -170,7 +188,7 @@ export function CalendarView() {
                 <Button variant="outline" size="icon-sm" aria-label="Previous month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1, 12))}>
                   <ChevronLeftIcon />
                 </Button>
-                <CardTitle className="min-w-40 text-center">
+                <CardTitle className="min-w-40 text-center max-sm:min-w-32">
                   {MONTHS[month.getMonth()]} {month.getFullYear()}
                 </CardTitle>
                 <Button variant="outline" size="icon-sm" aria-label="Next month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1, 12))}>
@@ -213,7 +231,7 @@ export function CalendarView() {
                     variant="outline"
                     onClick={() => setSelected(d)}
                     className={cn(
-                      "h-16 flex-col items-stretch justify-between gap-0.5 px-1.5 py-1 text-left",
+                      "h-16 flex-col items-stretch justify-between gap-0.5 px-1.5 py-1 text-left max-sm:h-12 max-sm:px-1",
                       isSel && "border-primary bg-primary/10",
                       isToday && "font-semibold",
                       !info?.reps && !info?.planned && past && "text-muted-foreground"
@@ -223,15 +241,18 @@ export function CalendarView() {
                       <span className={cn(isToday && "rounded bg-primary px-1 text-primary-foreground")}>{Number(d.slice(-2))}</span>
                       {info && info.reps > 0 && <span className="text-[10px] tabular-nums text-muted-foreground">{info.reps}</span>}
                     </div>
-                    {info && info.planned > 0 ? (
+                    {info && (info.planned > 0 || info.reps > 0) ? (
                       <div className="flex flex-col gap-0.5">
-                        <Progress value={Math.round((100 * info.complete) / info.planned)} className="h-1" />
-                        <span className="text-[10px] text-muted-foreground">
-                          {info.complete}/{info.planned} done
+                        {isToday && levelPlan && levelPlan.rows.length > 0 && (
+                          <Progress value={Math.round((100 * levelPlan.rows.reduce((a, r) => a + Math.min(levelPlan.done.get(r.drill.id) ?? 0, r.target), 0)) / Math.max(1, levelPlan.rows.reduce((a, r) => a + r.target, 0)))} className="h-1" />
+                        )}
+                        {!isToday && info.planned > 0 && <Progress value={Math.round((100 * info.complete) / info.planned)} className="h-1" />}
+                        {/* no room for the words in a phone-sized cell: the day panel below has them */}
+                        <span className="text-[10px] text-muted-foreground max-sm:hidden">
+                          {info.levelReps > 0 ? `${info.levelReps} level` : info.reps > 0 ? `${Math.round((100 * info.correct) / info.reps)} % right` : ""}
+                          {info.planned > 0 && `${info.levelReps > 0 || info.reps > 0 ? " · " : ""}${info.complete}/${info.planned} extra`}
                         </span>
                       </div>
-                    ) : info && info.reps > 0 ? (
-                      <span className="text-[10px] text-muted-foreground">{Math.round((100 * info.correct) / info.reps)} % right</span>
                     ) : (
                       <span />
                     )}
@@ -242,59 +263,10 @@ export function CalendarView() {
           </CardContent>
         </Card>
 
-        <DayPlan date={selected} info={selectedInfo} onSave={(items, notes) => persist(selected, items, notes)} />
+        <DayPlan date={selected} info={selectedInfo} levelPlan={levelPlan} onStart={levelData.start} onSave={(items, notes) => persist(selected, items, notes)} />
       </div>
 
       <Heatmap heat={heat} />
-
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <WandSparklesIcon className="size-4" /> Starter programme
-          </CardTitle>
-          <CardDescription>
-            Eight weeks that ease in, from naming single notes to harmonising a chorale. Pick a day in the calendar and apply a week: it fills that day and the six after it (day seven is a light day). Adjust anything afterwards.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {STARTER_PROGRAM.map((w, i) => (
-            <div key={w.week} className="flex flex-col gap-2 rounded-lg border p-3">
-              <div>
-                <div className="text-sm font-semibold">
-                  Week {w.week}: {w.title}
-                </div>
-                <div className="text-xs text-muted-foreground">{w.focus}</div>
-              </div>
-              <ul className="flex flex-col gap-0.5 text-xs">
-                {w.daily.map((it) => (
-                  <li key={it.id} className="flex justify-between gap-2">
-                    <span>{MODE_INFO[it.mode].label}</span>
-                    <span className="shrink-0 tabular-nums text-muted-foreground">
-                      {it.target} {MODE_INFO[it.mode].unit}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {w.lessons.length > 0 && (
-                <div className="text-xs text-muted-foreground">
-                  Read:{" "}
-                  {w.lessons.map((id, k) => (
-                    <span key={id}>
-                      {k > 0 && ", "}
-                      <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-foreground" onClick={() => { useUiStore.getState().setLearnLesson(id); setPracticeTab("learn"); }}>
-                        {LESSON_BY_ID.get(id)?.title ?? id}
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <Button variant="outline" size="sm" className="mt-auto" onClick={() => applyWeek(i)}>
-                Apply from {selected}
-              </Button>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -303,7 +275,7 @@ export function CalendarView() {
 // Day plan
 // ---------------------------------------------------------------------------
 
-function DayPlan({ date, info, onSave }: { date: string; info: DayInfo; onSave: (items: PlanItem[], notes: string) => void }) {
+function DayPlan({ date, info, levelPlan, onStart, onSave }: { date: string; info: DayInfo; levelPlan: LevelDayPlan | null; onStart: (d: DrillDef) => void; onSave: (items: PlanItem[], notes: string) => void }) {
   const [mode, setMode] = useState<PlanMode>("single-note");
   const [target, setTarget] = useState("30");
   const [minutes, setMinutes] = useState("");
@@ -333,12 +305,45 @@ function DayPlan({ date, info, onSave }: { date: string; info: DayInfo; onSave: 
       <CardHeader>
         <CardTitle>{label}</CardTitle>
         <CardDescription>
-          {info.reps ? `${info.reps} reps logged, ${Math.round((100 * info.correct) / info.reps)} % right${info.minutes ? `, ${Math.round(info.minutes)} min` : ""}` : "Nothing logged yet."}
-          {info.planned > 0 && ` · ${info.complete}/${info.planned} plan items done`}
+          {info.reps ? `${info.reps} reps logged (${info.levelReps} from the level), ${Math.round((100 * info.correct) / info.reps)} % right${info.minutes ? `, ${Math.round(info.minutes)} min` : ""}` : "Nothing logged yet."}
+          {info.planned > 0 && ` · ${info.complete}/${info.planned} extras done`}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {info.items.length === 0 && <p className="text-xs text-muted-foreground">No plan for this day. Add items below or apply a starter week.</p>}
+        {levelPlan && levelPlan.rows.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <FlagIcon className="size-3.5" /> Level {levelPlan.level.n}: {levelPlan.level.title}
+              {levelPlan.isPast && <span className="font-normal normal-case">· what was done</span>}
+              {!levelPlan.isPast && !levelPlan.isToday && <span className="font-normal normal-case">· if you are still on this level</span>}
+            </div>
+            {levelPlan.rows.map((r) => {
+              const done = levelPlan.done.get(r.drill.id) ?? 0;
+              const complete = done >= r.target;
+              return (
+                <div key={r.drill.id} className={cn("flex flex-col gap-1 rounded-md border p-2", complete && (levelPlan.isToday || levelPlan.isPast) && "border-green-500/50 bg-green-500/5")}>
+                  <div className="flex items-center gap-2">
+                    {complete && (levelPlan.isToday || levelPlan.isPast) ? <CheckIcon className="size-4 text-green-500" /> : <span className="inline-block size-4 rounded-full border-2 border-muted-foreground/40" />}
+                    <span className="text-sm font-medium">{MODE_INFO[r.drill.mode].label}</span>
+                    {r.review && <span className="text-[10px] text-muted-foreground">review</span>}
+                    <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                      {levelPlan.isPast ? `${done} done` : `${Math.min(done, r.target)}/${r.target}`} {MODE_INFO[r.drill.mode].unit}
+                    </span>
+                    {levelPlan.isToday && (
+                      <Button size="xs" onClick={() => onStart(r.drill)}>
+                        <PlayIcon /> Start
+                      </Button>
+                    )}
+                  </div>
+                  {!levelPlan.isPast && <Progress value={Math.round((100 * Math.min(done, r.target)) / Math.max(1, r.target))} className="h-1.5" />}
+                  <div className="text-xs text-muted-foreground">{r.drill.label}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Extras</div>
+        {info.items.length === 0 && <p className="text-xs text-muted-foreground">Nothing extra. The level above is the plan; add anything on top here.</p>}
         {info.items.map((it) => {
           const p = itemProgress(it, info.byMode);
           const m = MODE_INFO[it.mode];

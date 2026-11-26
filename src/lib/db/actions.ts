@@ -1,13 +1,34 @@
 "use server";
 
-import { and, desc, eq, gte, sql } from "drizzle-orm";
-import { db, schema } from "./client";
+import { and, desc, eq, gte, sql, type SQL } from "drizzle-orm";
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
+import { getDb, schema, type Db } from "./client";
+import { appTimeZone, dayKeyIn, daySql, shiftDayKey, startOfDayIn, zoneSegments } from "./time";
 import type { RecordedNote } from "@/lib/midi/recorder";
 import type { Piece } from "@/lib/music/score";
 
-const { sessions, attempts, recordings, pieces, pieceProgress, practicePlans } = schema;
+const { sessions, attempts, recordings, pieces, pieceProgress, practicePlans, settings: kv } = schema;
+
+// The database may be across the network (Turso), so every action opens with `await getDb()` and
+// anything that needs several queries sends them as one `db.batch([...])`: one round trip, not twenty.
+
+/**
+ * The local calendar day (YYYY-MM-DD) of an epoch-milliseconds column, in the app's timezone.
+ * A hosted database runs in UTC, so 'localtime' is not an option; see time.ts.
+ */
+function dayOf(column: AnySQLiteColumn): SQL<string> {
+  const COLUMN = "\u0000";
+  const pieces = daySql(COLUMN, zoneSegments(appTimeZone())).split(COLUMN);
+  return sql.join(pieces.map((p) => sql.raw(p)), column) as SQL<string>;
+}
+
+/** Hands a list of queries to `db.batch`, which wants to see at least one. */
+function nonEmpty<T>(items: T[]): [T, ...T[]] {
+  return items as [T, ...T[]];
+}
 
 export async function startSession(input: { mode: string; settings: unknown }): Promise<number> {
+  const db = await getDb();
   const [row] = await db
     .insert(sessions)
     .values({ mode: input.mode, startedAt: Date.now(), settings: input.settings })
@@ -16,6 +37,7 @@ export async function startSession(input: { mode: string; settings: unknown }): 
 }
 
 export async function endSession(id: number): Promise<void> {
+  const db = await getDb();
   await db.update(sessions).set({ endedAt: Date.now() }).where(eq(sessions.id, id));
 }
 
@@ -33,9 +55,13 @@ export interface LogAttemptInput {
   targetOctave?: number | null;
   answerPitchClass?: number | null;
   answerOctave?: number | null;
+  /** Level / drill the rep counts for (only when done from a level with that drill's settings). */
+  levelId?: string | null;
+  drillId?: string | null;
 }
 
 export async function logAttempt(input: LogAttemptInput): Promise<number> {
+  const db = await getDb();
   const [row] = await db
     .insert(attempts)
     .values({
@@ -53,9 +79,94 @@ export async function logAttempt(input: LogAttemptInput): Promise<number> {
       targetOctave: input.targetOctave ?? null,
       answerPitchClass: input.answerPitchClass ?? null,
       answerOctave: input.answerOctave ?? null,
+      levelId: input.levelId ?? null,
+      drillId: input.drillId ?? null,
     })
     .returning({ id: attempts.id });
   return row.id;
+}
+
+/** "I was right": a slip of the hand, not the ear. The rep counts as correct everywhere (stats, gates, confusions). */
+export async function markAttemptCorrect(id: number): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(attempts)
+    .set({
+      correct: true,
+      score: 1,
+      answerPitchClass: sql`${attempts.targetPitchClass}`,
+      answerOctave: sql`${attempts.targetOctave}`,
+      answer: sql`json_set(${attempts.answer}, '$.overridden', json('true'))`,
+    })
+    .where(eq(attempts.id, id));
+}
+
+// ---------------------------------------------------------------------------
+// Levels: state in the key/value table, tagged reps per drill for the gates
+// ---------------------------------------------------------------------------
+
+export interface LevelState {
+  currentLevelId: string;
+  /** Level id → ISO date it was advanced from. */
+  completed: Record<string, string>;
+  lessonsRead: string[];
+}
+
+const LEVEL_KEY = "levels";
+
+export async function getLevelState(): Promise<LevelState | null> {
+  const db = await getDb();
+  const [row] = await db.select().from(kv).where(eq(kv.key, LEVEL_KEY));
+  return row ? (row.value as LevelState) : null;
+}
+
+export async function saveLevelState(state: LevelState): Promise<void> {
+  const db = await getDb();
+  const updatedAt = Date.now();
+  await db.insert(kv).values({ key: LEVEL_KEY, value: state, updatedAt }).onConflictDoUpdate({ target: kv.key, set: { value: state, updatedAt } });
+}
+
+export interface DrillRow {
+  drillId: string;
+  day: string;
+  createdAt: number;
+  correct: boolean;
+  score: number;
+  targetOctave: number | null;
+  /** The target JSON as stored, for spread keys (interval, chord quality, scale). */
+  target: unknown;
+}
+
+/** The most recent tagged reps per drill (newest first), enough for each gate's window. */
+export async function getDrillRows(drills: { drillId: string; limit: number }[]): Promise<DrillRow[]> {
+  if (!drills.length) return [];
+  const db = await getDb();
+  const DAY = dayOf(attempts.createdAt);
+  const queries = drills.map((d) =>
+    db
+      .select({ drillId: attempts.drillId, day: sql<string>`${DAY}`, createdAt: attempts.createdAt, correct: attempts.correct, score: attempts.score, targetOctave: attempts.targetOctave, target: attempts.target })
+      .from(attempts)
+      .where(eq(attempts.drillId, d.drillId))
+      .orderBy(desc(attempts.createdAt))
+      .limit(Math.max(1, d.limit))
+  );
+  const results = await db.batch(nonEmpty(queries));
+  const out: DrillRow[] = [];
+  for (const rows of results) {
+    for (const r of rows) out.push({ drillId: r.drillId!, day: r.day, createdAt: r.createdAt, correct: !!r.correct, score: num(r.score), targetOctave: r.targetOctave, target: r.target });
+  }
+  return out;
+}
+
+/** Tagged reps per drill on one day (for the day's level plan). */
+export async function getDrillRepsOnDay(day: string): Promise<{ drillId: string; total: number; correct: number }[]> {
+  const db = await getDb();
+  const DAY = dayOf(attempts.createdAt);
+  const rows = (await db.all(sql`
+    select ${attempts.drillId} as drillId, count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct
+    from ${attempts} where ${attempts.drillId} is not null and ${DAY} = ${day}
+    group by 1`)) as { drillId: string; total: number; correct: number }[];
+  return rows.map((r) => ({ drillId: r.drillId, total: num(r.total), correct: num(r.correct) }));
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +198,8 @@ export interface StatsData {
   /** Smallest deviation reliably heard (≥80% direction accuracy on ≥4 reps) per day; null when not enough data. */
   centsJndByDay: { day: string; jnd: number | null }[];
   sequence: { length: number; total: number; correct: number; avgScore: number }[];
+  /** Scales & modes: per scale and question kind (run / melody). */
+  scales: { scaleId: string; variant: string; total: number; correct: number }[];
   /** Find the Mistake breakdowns (mode "mistakes"). */
   mistakes: {
     byType: { type: string; total: number; correct: number; avgScore: number; locCorrect: number; diagCorrect: number; fixAsked: number; fixCorrect: number }[];
@@ -113,121 +226,235 @@ export interface StatsData {
   humByDay: { day: string; total: number; avgScore: number }[];
 }
 
-const DAY = sql`date(${attempts.createdAt} / 1000, 'unixepoch', 'localtime')`;
 const CORRECT = sql<number>`sum(case when ${attempts.correct} then 1 else 0 end)`;
 const num = (v: unknown) => Number(v ?? 0);
 
-function computeStreak(days: string[]): { current: number; longest: number } {
+/** `today` is the current day in the app's timezone (the server's own clock may be in UTC). */
+function computeStreak(days: string[], today: string): { current: number; longest: number } {
   if (!days.length) return { current: 0, longest: 0 };
   const set = new Set(days);
-  const dayMs = 86400e3;
-  const toKey = (t: number) => {
-    const d = new Date(t);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  };
   // current: count back from today (or yesterday if today has nothing yet)
-  const now = new Date();
-  now.setHours(12, 0, 0, 0);
-  let t = now.getTime();
-  if (!set.has(toKey(t))) t -= dayMs;
+  let key = set.has(today) ? today : shiftDayKey(today, -1);
   let current = 0;
-  while (set.has(toKey(t))) {
+  while (set.has(key)) {
     current++;
-    t -= dayMs;
+    key = shiftDayKey(key, -1);
   }
   // longest: walk the sorted list
   const sorted = [...set].sort();
   let longest = 1;
   let run = 1;
   for (let i = 1; i < sorted.length; i++) {
-    const prev = new Date(sorted[i - 1] + "T12:00:00").getTime();
-    const cur = new Date(sorted[i] + "T12:00:00").getTime();
-    run = Math.round((cur - prev) / dayMs) === 1 ? run + 1 : 1;
+    run = shiftDayKey(sorted[i - 1], 1) === sorted[i] ? run + 1 : 1;
     longest = Math.max(longest, run);
   }
   return { current, longest };
 }
 
 export async function getStats(rangeDays: number | null): Promise<StatsData> {
-  const since = rangeDays ? Date.now() - rangeDays * 86400e3 : 0;
+  const db = await getDb();
+  const zone = appTimeZone();
+  const now = Date.now();
+  const since = rangeDays ? now - rangeDays * 86400e3 : 0;
   const inRange = gte(attempts.createdAt, since);
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
+  const startOfToday = startOfDayIn(zone, now);
+  const DAY = dayOf(attempts.createdAt);
+  const dirExpr = sql`case when json_extract(${attempts.target}, '$.cents') > 0 then 'sharp' when json_extract(${attempts.target}, '$.cents') < 0 then 'flat' else 'in-tune' end`;
 
-  const [totals] = await db
-    .select({ total: sql<number>`count(*)`, correct: CORRECT, avgMs: sql<number>`coalesce(avg(${attempts.responseMs}), 0)`, avgScore: sql<number>`coalesce(avg(${attempts.score}), 0)` })
-    .from(attempts)
-    .where(inRange);
-  const [today] = await db.select({ total: sql<number>`count(*)`, correct: CORRECT }).from(attempts).where(gte(attempts.createdAt, startOfToday.getTime()));
+  // Everything the page shows, sent as one batch: a single round trip to the database.
+  const [
+    totalsRows,
+    todayRows,
+    allDays,
+    byDay,
+    byMode,
+    byPitchClass,
+    byOctave,
+    byInstrument,
+    confusion,
+    intervals,
+    chords,
+    cents,
+    centsDaily,
+    sequence,
+    scales,
+    mistakesByType,
+    mistakesByCents,
+    mistakesBySource,
+    transcribeByVoices,
+    transcribeByBars,
+    longestRows,
+    shadowByDay,
+    theoryByKind,
+    theoryByLevel,
+    promptByDay,
+    humByDay,
+  ] = await db.batch([
+    db
+      .select({ total: sql<number>`count(*)`, correct: CORRECT, avgMs: sql<number>`coalesce(avg(${attempts.responseMs}), 0)`, avgScore: sql<number>`coalesce(avg(${attempts.score}), 0)` })
+      .from(attempts)
+      .where(inRange),
 
-  const allDays = await db.select({ day: sql<string>`${DAY}` }).from(attempts).groupBy(DAY).orderBy(sql`1`);
-  const streak = computeStreak(allDays.map((r) => r.day));
+    db.select({ total: sql<number>`count(*)`, correct: CORRECT }).from(attempts).where(gte(attempts.createdAt, startOfToday)),
 
-  const byDay = await db
-    .select({ day: sql<string>`${DAY}`, total: sql<number>`count(*)`, correct: CORRECT, avgMs: sql<number>`avg(${attempts.responseMs})` })
-    .from(attempts)
-    .where(inRange)
-    .groupBy(DAY)
-    .orderBy(sql`1`);
+    db.select({ day: sql<string>`${DAY}` }).from(attempts).groupBy(DAY).orderBy(sql`1`),
 
-  const byMode = await db
-    .select({ mode: attempts.mode, total: sql<number>`count(*)`, correct: CORRECT, avgScore: sql<number>`avg(${attempts.score})` })
-    .from(attempts)
-    .where(inRange)
-    .groupBy(attempts.mode)
-    .orderBy(desc(sql`count(*)`));
+    db
+      .select({ day: sql<string>`${DAY}`, total: sql<number>`count(*)`, correct: CORRECT, avgMs: sql<number>`avg(${attempts.responseMs})` })
+      .from(attempts)
+      .where(inRange)
+      .groupBy(DAY)
+      .orderBy(sql`1`),
 
-  const byPitchClass = await db
-    .select({ pitchClass: attempts.targetPitchClass, total: sql<number>`count(*)`, correct: CORRECT })
-    .from(attempts)
-    .where(and(inRange, sql`${attempts.targetPitchClass} is not null`))
-    .groupBy(attempts.targetPitchClass);
+    db
+      .select({ mode: attempts.mode, total: sql<number>`count(*)`, correct: CORRECT, avgScore: sql<number>`avg(${attempts.score})` })
+      .from(attempts)
+      .where(inRange)
+      .groupBy(attempts.mode)
+      .orderBy(desc(sql`count(*)`)),
 
-  const byOctave = await db
-    .select({ octave: attempts.targetOctave, total: sql<number>`count(*)`, correct: CORRECT })
-    .from(attempts)
-    .where(and(inRange, sql`${attempts.targetOctave} is not null`))
-    .groupBy(attempts.targetOctave);
+    db
+      .select({ pitchClass: attempts.targetPitchClass, total: sql<number>`count(*)`, correct: CORRECT })
+      .from(attempts)
+      .where(and(inRange, sql`${attempts.targetPitchClass} is not null`))
+      .groupBy(attempts.targetPitchClass),
 
-  const byInstrument = await db
-    .select({ instrumentId: attempts.instrumentId, total: sql<number>`count(*)`, correct: CORRECT })
-    .from(attempts)
-    .where(inRange)
-    .groupBy(attempts.instrumentId)
-    .orderBy(desc(sql`count(*)`));
+    db
+      .select({ octave: attempts.targetOctave, total: sql<number>`count(*)`, correct: CORRECT })
+      .from(attempts)
+      .where(and(inRange, sql`${attempts.targetOctave} is not null`))
+      .groupBy(attempts.targetOctave),
 
-  const confusion = await db
-    .select({ target: attempts.targetPitchClass, answer: attempts.answerPitchClass, n: sql<number>`count(*)` })
-    .from(attempts)
-    .where(and(inRange, sql`${attempts.targetPitchClass} is not null and ${attempts.answerPitchClass} is not null`))
-    .groupBy(attempts.targetPitchClass, attempts.answerPitchClass);
+    db
+      .select({ instrumentId: attempts.instrumentId, total: sql<number>`count(*)`, correct: CORRECT })
+      .from(attempts)
+      .where(inRange)
+      .groupBy(attempts.instrumentId)
+      .orderBy(desc(sql`count(*)`)),
 
-  const intervals = (await db.all(sql`
+    db
+      .select({ target: attempts.targetPitchClass, answer: attempts.answerPitchClass, n: sql<number>`count(*)` })
+      .from(attempts)
+      .where(and(inRange, sql`${attempts.targetPitchClass} is not null and ${attempts.answerPitchClass} is not null`))
+      .groupBy(attempts.targetPitchClass, attempts.answerPitchClass),
+
+    db.all<{ semitones: number; total: number; correct: number }>(sql`
     select t.value as semitones, count(*) as total, sum(case when a.value = t.value then 1 else 0 end) as correct
     from ${attempts}, json_each(json_extract(${attempts.target}, '$.intervals')) as t
     left join json_each(json_extract(${attempts.answer}, '$.intervals')) as a on a.key = t.key
     where ${attempts.mode} = 'intervals' and ${attempts.createdAt} >= ${since}
-    group by t.value order by t.value`)) as { semitones: number; total: number; correct: number }[];
+    group by t.value order by t.value`),
 
-  const chords = (await db.all(sql`
+    db.all<{ qualityId: string | null; kind: string; total: number; correct: number; avgScore: number }>(sql`
     select json_extract(${attempts.target}, '$.spec.qualityId') as qualityId, json_extract(${attempts.target}, '$.kind') as kind,
            count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
     from ${attempts} where ${attempts.mode} = 'chords' and ${attempts.createdAt} >= ${since}
-    group by 1, 2 order by total desc`)) as { qualityId: string | null; kind: string; total: number; correct: number; avgScore: number }[];
+    group by 1, 2 order by total desc`),
 
-  const dirExpr = sql`case when json_extract(${attempts.target}, '$.cents') > 0 then 'sharp' when json_extract(${attempts.target}, '$.cents') < 0 then 'flat' else 'in-tune' end`;
-  const cents = (await db.all(sql`
+    db.all<{ amount: number; total: number; correct: number; dirCorrect: number }>(sql`
     select abs(json_extract(${attempts.target}, '$.cents')) as amount, count(*) as total,
            sum(case when ${attempts.correct} then 1 else 0 end) as correct,
            sum(case when json_extract(${attempts.answer}, '$.direction') = ${dirExpr} then 1 else 0 end) as dirCorrect
     from ${attempts} where ${attempts.mode} = 'cents' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { amount: number; total: number; correct: number; dirCorrect: number }[];
+    group by 1 order by 1`),
 
-  const centsDaily = (await db.all(sql`
+    db.all<{ day: string; amount: number; total: number; dirCorrect: number }>(sql`
     select ${DAY} as day, abs(json_extract(${attempts.target}, '$.cents')) as amount, count(*) as total,
            sum(case when json_extract(${attempts.answer}, '$.direction') = ${dirExpr} then 1 else 0 end) as dirCorrect
     from ${attempts} where ${attempts.mode} = 'cents' and ${attempts.createdAt} >= ${since} and json_extract(${attempts.target}, '$.cents') != 0
-    group by 1, 2 order by 1, 2`)) as { day: string; amount: number; total: number; dirCorrect: number }[];
+    group by 1, 2 order by 1, 2`),
+
+    // Not `as length`: a libSQL row is array-like, and its own length (the column count) would win.
+    db.all<{ noteCount: number; total: number; correct: number; avgScore: number }>(sql`
+    select json_array_length(json_extract(${attempts.target}, '$.notes')) as noteCount, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'sequence' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`),
+
+    db.all<{ scaleId: string; variant: string; total: number; correct: number }>(sql`
+    select json_extract(${attempts.target}, '$.scaleId') as scaleId, json_extract(${attempts.target}, '$.variant') as variant,
+           count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct
+    from ${attempts} where ${attempts.mode} = 'scales' and ${attempts.createdAt} >= ${since}
+    group by 1, 2 order by 1, 2`),
+
+    db.all<{ type: string; total: number; correct: number; avgScore: number; locCorrect: number; diagCorrect: number; fixAsked: number; fixCorrect: number }>(sql`
+    select json_extract(${attempts.target}, '$.type') as type, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore,
+           sum(case when json_extract(${attempts.answer}, '$.locationOk') then 1 else 0 end) as locCorrect,
+           sum(case when json_extract(${attempts.answer}, '$.diagnosisOk') then 1 else 0 end) as diagCorrect,
+           sum(case when json_extract(${attempts.answer}, '$.fixOk') is not null then 1 else 0 end) as fixAsked,
+           sum(case when json_extract(${attempts.answer}, '$.fixOk') then 1 else 0 end) as fixCorrect
+    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
+    group by 1 order by total desc`),
+
+    db.all<{ amount: number; total: number; correct: number; dirCorrect: number }>(sql`
+    select abs(json_extract(${attempts.target}, '$.cents')) as amount, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct,
+           sum(case when json_extract(${attempts.answer}, '$.diagnosisOk') then 1 else 0 end) as dirCorrect
+    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
+      and json_extract(${attempts.target}, '$.cents') is not null and json_extract(${attempts.target}, '$.type') != 'ab'
+    group by 1 order by 1`),
+
+    db.all<{ source: string; total: number; correct: number; avgScore: number }>(sql`
+    select json_extract(${attempts.target}, '$.source') as source, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
+    group by 1 order by total desc`),
+
+    db.all<{ voices: number; total: number; correct: number; avgScore: number }>(sql`
+    select json_extract(${attempts.target}, '$.voices') as voices, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`),
+
+    db.all<{ bars: number; total: number; correct: number; avgScore: number }>(sql`
+    select json_extract(${attempts.target}, '$.bars') as bars, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`),
+
+    db.all<{ correctBars: number | null; passedBars: number | null }>(sql`
+    select max(case when ${attempts.correct} then json_extract(${attempts.target}, '$.bars') end) as correctBars,
+           max(case when ${attempts.score} >= 0.9 then json_extract(${attempts.target}, '$.bars') end) as passedBars
+    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}`),
+
+    db.all<{ day: string; total: number; avgScore: number }>(sql`
+    select ${DAY} as day, count(*) as total, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'shadow' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`),
+
+    db.all<{ kind: string; total: number; correct: number; avgScore: number }>(sql`
+    select json_extract(${attempts.target}, '$.kind') as kind, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'theory' and ${attempts.createdAt} >= ${since}
+    group by 1 order by total desc`),
+
+    db.all<{ level: number; total: number; correct: number; avgScore: number }>(sql`
+    select json_extract(${attempts.target}, '$.level') as level, count(*) as total,
+           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'theory' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`),
+
+    db.all<{ day: string; total: number; avgRating: number; avgLatencyMs: number | null }>(sql`
+    select ${DAY} as day, count(*) as total, avg(json_extract(${attempts.answer}, '$.rating')) as avgRating,
+           avg(json_extract(${attempts.answer}, '$.latencyMs')) as avgLatencyMs
+    from ${attempts} where ${attempts.mode} = 'prompt' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`),
+
+    db.all<{ day: string; total: number; avgScore: number }>(sql`
+    select ${DAY} as day, count(*) as total, avg(${attempts.score}) as avgScore
+    from ${attempts} where ${attempts.mode} = 'hum' and ${attempts.createdAt} >= ${since}
+    group by 1 order by 1`),
+  ]);
+
+  const totals = totalsRows[0];
+  const today = todayRows[0];
+  const longest = longestRows[0];
+  const streak = computeStreak(
+    allDays.map((r) => r.day),
+    dayKeyIn(zone, now)
+  );
+
   const jndMap = new Map<string, number | null>();
   for (const r of centsDaily) {
     if (!jndMap.has(r.day)) jndMap.set(r.day, null);
@@ -236,81 +463,6 @@ export async function getStats(rangeDays: number | null): Promise<StatsData> {
       if (cur === null || cur === undefined || num(r.amount) < cur) jndMap.set(r.day, num(r.amount));
     }
   }
-
-  const sequence = (await db.all(sql`
-    select json_array_length(json_extract(${attempts.target}, '$.notes')) as length, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'sequence' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { length: number; total: number; correct: number; avgScore: number }[];
-
-  const mistakesByType = (await db.all(sql`
-    select json_extract(${attempts.target}, '$.type') as type, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore,
-           sum(case when json_extract(${attempts.answer}, '$.locationOk') then 1 else 0 end) as locCorrect,
-           sum(case when json_extract(${attempts.answer}, '$.diagnosisOk') then 1 else 0 end) as diagCorrect,
-           sum(case when json_extract(${attempts.answer}, '$.fixOk') is not null then 1 else 0 end) as fixAsked,
-           sum(case when json_extract(${attempts.answer}, '$.fixOk') then 1 else 0 end) as fixCorrect
-    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
-    group by 1 order by total desc`)) as { type: string; total: number; correct: number; avgScore: number; locCorrect: number; diagCorrect: number; fixAsked: number; fixCorrect: number }[];
-
-  const mistakesByCents = (await db.all(sql`
-    select abs(json_extract(${attempts.target}, '$.cents')) as amount, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct,
-           sum(case when json_extract(${attempts.answer}, '$.diagnosisOk') then 1 else 0 end) as dirCorrect
-    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
-      and json_extract(${attempts.target}, '$.cents') is not null and json_extract(${attempts.target}, '$.type') != 'ab'
-    group by 1 order by 1`)) as { amount: number; total: number; correct: number; dirCorrect: number }[];
-
-  const mistakesBySource = (await db.all(sql`
-    select json_extract(${attempts.target}, '$.source') as source, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'mistakes' and ${attempts.createdAt} >= ${since}
-    group by 1 order by total desc`)) as { source: string; total: number; correct: number; avgScore: number }[];
-
-  const transcribeByVoices = (await db.all(sql`
-    select json_extract(${attempts.target}, '$.voices') as voices, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { voices: number; total: number; correct: number; avgScore: number }[];
-
-  const transcribeByBars = (await db.all(sql`
-    select json_extract(${attempts.target}, '$.bars') as bars, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { bars: number; total: number; correct: number; avgScore: number }[];
-
-  const [longest] = (await db.all(sql`
-    select max(case when ${attempts.correct} then json_extract(${attempts.target}, '$.bars') end) as correctBars,
-           max(case when ${attempts.score} >= 0.9 then json_extract(${attempts.target}, '$.bars') end) as passedBars
-    from ${attempts} where ${attempts.mode} = 'transcribe' and ${attempts.createdAt} >= ${since}`)) as { correctBars: number | null; passedBars: number | null }[];
-
-  const shadowByDay = (await db.all(sql`
-    select ${DAY} as day, count(*) as total, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'shadow' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { day: string; total: number; avgScore: number }[];
-
-  const theoryByKind = (await db.all(sql`
-    select json_extract(${attempts.target}, '$.kind') as kind, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'theory' and ${attempts.createdAt} >= ${since}
-    group by 1 order by total desc`)) as { kind: string; total: number; correct: number; avgScore: number }[];
-
-  const theoryByLevel = (await db.all(sql`
-    select json_extract(${attempts.target}, '$.level') as level, count(*) as total,
-           sum(case when ${attempts.correct} then 1 else 0 end) as correct, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'theory' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { level: number; total: number; correct: number; avgScore: number }[];
-
-  const promptByDay = (await db.all(sql`
-    select ${DAY} as day, count(*) as total, avg(json_extract(${attempts.answer}, '$.rating')) as avgRating,
-           avg(json_extract(${attempts.answer}, '$.latencyMs')) as avgLatencyMs
-    from ${attempts} where ${attempts.mode} = 'prompt' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { day: string; total: number; avgRating: number; avgLatencyMs: number | null }[];
-
-  const humByDay = (await db.all(sql`
-    select ${DAY} as day, count(*) as total, avg(${attempts.score}) as avgScore
-    from ${attempts} where ${attempts.mode} = 'hum' and ${attempts.createdAt} >= ${since}
-    group by 1 order by 1`)) as { day: string; total: number; avgScore: number }[];
 
   return {
     rangeDays,
@@ -327,7 +479,8 @@ export async function getStats(rangeDays: number | null): Promise<StatsData> {
     chords: chords.map((r) => ({ qualityId: r.qualityId, kind: r.kind, total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
     cents: cents.map((r) => ({ amount: num(r.amount), total: num(r.total), correct: num(r.correct), dirCorrect: num(r.dirCorrect) })),
     centsJndByDay: [...jndMap.entries()].map(([day, jnd]) => ({ day, jnd })),
-    sequence: sequence.map((r) => ({ length: num(r.length), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+    sequence: sequence.map((r) => ({ length: num(r.noteCount), total: num(r.total), correct: num(r.correct), avgScore: num(r.avgScore) })),
+    scales: scales.map((r) => ({ scaleId: String(r.scaleId ?? "?"), variant: String(r.variant ?? "?"), total: num(r.total), correct: num(r.correct) })),
     mistakes: {
       byType: mistakesByType.map((r) => ({
         type: String(r.type ?? "?"),
@@ -366,6 +519,7 @@ export interface MissWeights {
 
 /** Recent lifetime accuracy per pitch class / octave / instrument, used to seed adaptive weighting. */
 export async function getMissWeights(limit = 3000): Promise<MissWeights> {
+  const db = await getDb();
   const recent = db
     .select({ id: attempts.id })
     .from(attempts)
@@ -375,13 +529,15 @@ export async function getMissWeights(limit = 3000): Promise<MissWeights> {
   const correctSum = sql<number>`sum(case when ${attempts.correct} then 1 else 0 end)`;
   const base = () => db.select({ pitchClass: attempts.targetPitchClass, octave: attempts.targetOctave, instrumentId: attempts.instrumentId, total: sql<number>`count(*)`, correct: correctSum }).from(attempts).innerJoin(recent, eq(recent.id, attempts.id));
 
-  const byPitchClass = await base()
-    .where(sql`${attempts.targetPitchClass} is not null`)
-    .groupBy(attempts.targetPitchClass);
-  const byOctave = await base()
-    .where(sql`${attempts.targetOctave} is not null`)
-    .groupBy(attempts.targetOctave);
-  const byInstrument = await base().groupBy(attempts.instrumentId);
+  const [byPitchClass, byOctave, byInstrument] = await db.batch([
+    base()
+      .where(sql`${attempts.targetPitchClass} is not null`)
+      .groupBy(attempts.targetPitchClass),
+    base()
+      .where(sql`${attempts.targetOctave} is not null`)
+      .groupBy(attempts.targetOctave),
+    base().groupBy(attempts.instrumentId),
+  ]);
 
   return {
     byPitchClass: byPitchClass.map((r) => ({ pitchClass: r.pitchClass!, total: Number(r.total), correct: Number(r.correct ?? 0) })),
@@ -407,6 +563,7 @@ export interface PieceSummary {
 }
 
 export async function savePiece(piece: Piece): Promise<number> {
+  const db = await getDb();
   const [row] = await db
     .insert(pieces)
     .values({ createdAt: Date.now(), name: piece.name, source: piece.source, bpm: piece.bpm, beatsPerBar: piece.beatsPerBar, totalBeats: piece.totalBeats, data: piece })
@@ -415,6 +572,7 @@ export async function savePiece(piece: Piece): Promise<number> {
 }
 
 export async function listPieces(): Promise<PieceSummary[]> {
+  const db = await getDb();
   const rows = await db.select().from(pieces).orderBy(desc(pieces.createdAt)).limit(200);
   return rows.map((r) => {
     const p = r.data as Piece;
@@ -433,22 +591,25 @@ export async function listPieces(): Promise<PieceSummary[]> {
 }
 
 export async function getPiece(id: number): Promise<Piece | null> {
+  const db = await getDb();
   const [r] = await db.select().from(pieces).where(eq(pieces.id, id));
   if (!r) return null;
   return { ...(r.data as Piece), id: `upload:${r.id}`, name: r.name };
 }
 
 export async function deletePiece(id: number): Promise<void> {
-  await db.delete(pieces).where(eq(pieces.id, id));
-  await db.delete(pieceProgress).where(eq(pieceProgress.pieceKey, `upload:${id}`));
+  const db = await getDb();
+  await db.batch([db.delete(pieces).where(eq(pieces.id, id)), db.delete(pieceProgress).where(eq(pieceProgress.pieceKey, `upload:${id}`))]);
 }
 
 export async function getPieceProgress(pieceKey: string): Promise<{ phraseIndex: number; bestScore: number; attempts: number }[]> {
+  const db = await getDb();
   const rows = await db.select().from(pieceProgress).where(eq(pieceProgress.pieceKey, pieceKey));
   return rows.map((r) => ({ phraseIndex: r.phraseIndex, bestScore: r.bestScore, attempts: r.attempts }));
 }
 
 export async function recordPhraseResult(pieceKey: string, phraseIndex: number, score: number): Promise<void> {
+  const db = await getDb();
   const [existing] = await db
     .select()
     .from(pieceProgress)
@@ -486,43 +647,63 @@ export interface PracticeRange {
   reps: ModeDayRow[];
   /** Minutes per day per session mode (sessions that were ended). */
   minutes: { day: string; mode: string; minutes: number }[];
+  /** Reps per day that were done from a level drill (tagged). */
+  levelDays: { day: string; total: number; correct: number }[];
 }
 
-const SESSION_DAY = sql`date(${sessions.startedAt} / 1000, 'unixepoch', 'localtime')`;
-
 export async function getPracticeRange(from: string, to: string): Promise<PracticeRange> {
-  const plans = await db.select().from(practicePlans).where(and(gte(practicePlans.date, from), sql`${practicePlans.date} <= ${to}`));
-  const reps = (await db.all(sql`
+  const db = await getDb();
+  const DAY = dayOf(attempts.createdAt);
+  const SESSION_DAY = dayOf(sessions.startedAt);
+  const [plans, reps, minutes, levelDays] = await db.batch([
+    db.select().from(practicePlans).where(and(gte(practicePlans.date, from), sql`${practicePlans.date} <= ${to}`)),
+    db.all<ModeDayRow>(sql`
     select ${DAY} as day, ${attempts.mode} as mode, count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct
     from ${attempts} where ${DAY} >= ${from} and ${DAY} <= ${to}
-    group by 1, 2 order by 1`)) as ModeDayRow[];
-  const minutes = (await db.all(sql`
+    group by 1, 2 order by 1`),
+    db.all<{ day: string; mode: string; minutes: number }>(sql`
     select ${SESSION_DAY} as day, ${sessions.mode} as mode, sum(${sessions.endedAt} - ${sessions.startedAt}) / 60000.0 as minutes
     from ${sessions} where ${sessions.endedAt} is not null and ${SESSION_DAY} >= ${from} and ${SESSION_DAY} <= ${to}
-    group by 1, 2`)) as { day: string; mode: string; minutes: number }[];
+    group by 1, 2`),
+    db.all<{ day: string; total: number; correct: number }>(sql`
+    select ${DAY} as day, count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct
+    from ${attempts} where ${attempts.drillId} is not null and ${DAY} >= ${from} and ${DAY} <= ${to}
+    group by 1 order by 1`),
+  ]);
   return {
     plans: plans.map((p) => ({ date: p.date, items: Array.isArray(p.items) ? (p.items as unknown[]) : [], notes: p.notes })),
     reps: reps.map((r) => ({ day: r.day, mode: r.mode, total: num(r.total), correct: num(r.correct) })),
     minutes: minutes.map((m) => ({ day: m.day, mode: m.mode, minutes: Math.round(num(m.minutes) * 10) / 10 })),
+    levelDays: levelDays.map((r) => ({ day: r.day, total: num(r.total), correct: num(r.correct) })),
   };
 }
 
+/** Insert the day's plan, or replace it when the day already has one (the date is unique). */
+function planUpsert(db: Db, date: string, items: unknown[], notes: string) {
+  const updatedAt = Date.now();
+  return db.insert(practicePlans).values({ date, items, notes, updatedAt }).onConflictDoUpdate({ target: practicePlans.date, set: { items, notes, updatedAt } });
+}
+
 export async function savePlan(date: string, items: unknown[], notes: string): Promise<void> {
-  const [existing] = await db.select({ id: practicePlans.id }).from(practicePlans).where(eq(practicePlans.date, date));
-  if (existing) await db.update(practicePlans).set({ items, notes, updatedAt: Date.now() }).where(eq(practicePlans.id, existing.id));
-  else await db.insert(practicePlans).values({ date, items, notes, updatedAt: Date.now() });
+  const db = await getDb();
+  await planUpsert(db, date, items, notes);
 }
 
 export async function savePlans(rows: { date: string; items: unknown[]; notes?: string }[]): Promise<void> {
-  for (const r of rows) await savePlan(r.date, r.items, r.notes ?? "");
+  if (!rows.length) return;
+  const db = await getDb();
+  await db.batch(nonEmpty(rows.map((r) => planUpsert(db, r.date, r.items, r.notes ?? ""))));
 }
 
 export async function deletePlan(date: string): Promise<void> {
+  const db = await getDb();
   await db.delete(practicePlans).where(eq(practicePlans.date, date));
 }
 
 /** Reps per day for the heatmap and streaks. */
 export async function getRepsByDay(days: number): Promise<{ day: string; total: number; correct: number }[]> {
+  const db = await getDb();
+  const DAY = dayOf(attempts.createdAt);
   const since = Date.now() - days * 86400e3;
   const rows = await db
     .select({ day: sql<string>`${DAY}`, total: sql<number>`count(*)`, correct: CORRECT })
@@ -535,12 +716,16 @@ export async function getRepsByDay(days: number): Promise<{ day: string; total: 
 
 /** Everything the Progress tab needs: lifetime stats plus reps per mode per day for trends. */
 export async function getProgressData(): Promise<{ all: StatsData; modeDays: ModeDayRow[] }> {
-  const all = await getStats(null);
+  const db = await getDb();
+  const DAY = dayOf(attempts.createdAt);
   const since = Date.now() - 60 * 86400e3;
-  const modeDays = (await db.all(sql`
+  const [all, modeDays] = await Promise.all([
+    getStats(null),
+    db.all<ModeDayRow>(sql`
     select ${DAY} as day, ${attempts.mode} as mode, count(*) as total, sum(case when ${attempts.correct} then 1 else 0 end) as correct
     from ${attempts} where ${attempts.createdAt} >= ${since}
-    group by 1, 2 order by 1`)) as ModeDayRow[];
+    group by 1, 2 order by 1`),
+  ]);
   return { all, modeDays: modeDays.map((r) => ({ day: r.day, mode: r.mode, total: num(r.total), correct: num(r.correct) })) };
 }
 
@@ -562,6 +747,7 @@ export async function saveRecording(input: {
   events: RecordedNote[];
   sourceRef?: string | null;
 }): Promise<number> {
+  const db = await getDb();
   const [row] = await db
     .insert(recordings)
     .values({
@@ -578,6 +764,7 @@ export async function saveRecording(input: {
 }
 
 export async function listRecordings(): Promise<RecordingSummary[]> {
+  const db = await getDb();
   const rows = await db.select().from(recordings).orderBy(desc(recordings.createdAt)).limit(100);
   return rows.map((r) => ({
     id: r.id,
@@ -591,11 +778,13 @@ export async function listRecordings(): Promise<RecordingSummary[]> {
 }
 
 export async function getRecording(id: number): Promise<{ id: number; name: string; instrumentId: string; events: RecordedNote[]; durationMs: number } | null> {
+  const db = await getDb();
   const [r] = await db.select().from(recordings).where(eq(recordings.id, id));
   if (!r) return null;
   return { id: r.id, name: r.name, instrumentId: r.instrumentId, events: r.events as RecordedNote[], durationMs: r.durationMs };
 }
 
 export async function deleteRecording(id: number): Promise<void> {
+  const db = await getDb();
   await db.delete(recordings).where(eq(recordings.id, id));
 }

@@ -1,11 +1,13 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { PlayIcon, RotateCcwIcon, SquareIcon } from "lucide-react";
+import { CheckIcon, PlayIcon, RotateCcwIcon, SquareIcon } from "lucide-react";
+import { useIsPhone } from "@/lib/hooks/use-media";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Kbd } from "@/components/ui/kbd";
+import { PhoneStage } from "@/components/phone-stage";
 import type { QuizApi } from "./use-quiz";
 
 export interface QuizShellProps {
@@ -19,6 +21,7 @@ export interface QuizShellProps {
     | "start"
     | "askNext"
     | "hearAgain"
+    | "markCorrect"
     | "finish"
     | "inQuiz"
     | "answeredCount"
@@ -35,11 +38,97 @@ export interface QuizShellProps {
   extraButtons?: ReactNode;
   /** Rendered under the card when the quiz has ended. */
   summary?: ReactNode;
+  /** On the phone's fixed screen the feedback row is a set height; modes whose feedback runs to several lines ask for the taller one. */
+  tallFeedback?: boolean;
   children?: ReactNode;
 }
 
-export function QuizShell({ quiz, title, idleText, questionText, feedback, extraButtons, summary, children }: QuizShellProps) {
+export function QuizShell({ quiz, title, idleText, questionText, feedback, extraButtons, summary, tallFeedback, children }: QuizShellProps) {
   const { phase, settings, replays, loadingLabel, engineLoading, inQuiz, answeredCount, correctCount, remaining, scored } = quiz;
+  const phone = useIsPhone();
+
+  const statusText =
+    phase === "idle"
+      ? idleText
+      : phase === "loading"
+        ? loadingLabel
+          ? `Loading ${loadingLabel}…`
+          : "Loading…"
+        : phase === "question"
+          ? questionText
+          : phase === "answered"
+            ? scored?.correct
+              ? "Correct."
+              : scored && scored.score > 0
+                ? "Partly right."
+                : "Not quite."
+            : "Quiz finished.";
+
+  const score = (
+    <>
+      <Badge variant="secondary">
+        {correctCount}/{answeredCount} {answeredCount ? `(${Math.round((100 * correctCount) / answeredCount)}%)` : ""}
+      </Badge>
+      {remaining !== null && <Badge variant="outline">{remaining} left</Badge>}
+      {engineLoading.length > 0 && (
+        <Badge variant="outline" className="animate-pulse">
+          loading {engineLoading.length}
+        </Badge>
+      )}
+    </>
+  );
+  const replaysLeft = settings.replayLimit !== "unlimited" && phase === "question" && (
+    <span className="text-xs text-muted-foreground">({settings.replayLimit === "one" ? Math.max(0, 1 - replays) : 0} left)</span>
+  );
+
+  // ----- the phone: one fixed screen (see phone-stage.tsx) -----
+  if (phone) {
+    return (
+      <PhoneStage
+        title={title}
+        levelStore="trainer"
+        status={statusText}
+        feedback={phase === "answered" ? feedback : undefined}
+        tallStatus={tallFeedback}
+        score={score}
+        inQuiz={inQuiz}
+        ended={phase === "ended"}
+        onEnd={quiz.finish}
+        transport={
+          !inQuiz ? (
+            <Button onClick={quiz.start}>
+              <PlayIcon /> {phase === "ended" ? "Practice again" : "Start"}
+            </Button>
+          ) : (
+            <>
+              <Button onClick={quiz.askNext} disabled={phase !== "answered"}>
+                <PlayIcon /> Hear next
+              </Button>
+              <Button variant="outline" onClick={quiz.hearAgain} disabled={phase === "loading"}>
+                <RotateCcwIcon /> Hear again {replaysLeft}
+              </Button>
+            </>
+          )
+        }
+        extras={
+          phase === "answered" && (
+            <>
+              {extraButtons}
+              {scored && !scored.correct && (
+                <Button variant="outline" onClick={quiz.markCorrect}>
+                  <CheckIcon /> I was right
+                </Button>
+              )}
+            </>
+          )
+        }
+        summary={summary}
+      >
+        {children}
+      </PhoneStage>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <Card size="sm">
@@ -47,25 +136,9 @@ export function QuizShell({ quiz, title, idleText, questionText, feedback, extra
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle>{title}</CardTitle>
-              <CardDescription>
-                {phase === "idle" && idleText}
-                {phase === "loading" && (loadingLabel ? `Loading ${loadingLabel}…` : "Loading…")}
-                {phase === "question" && questionText}
-                {phase === "answered" && (scored?.correct ? "Correct." : scored && scored.score > 0 ? "Partly right." : "Not quite.")}
-                {phase === "ended" && "Quiz finished."}
-              </CardDescription>
+              <CardDescription>{statusText}</CardDescription>
             </div>
-            <div className="flex items-center gap-2 text-sm tabular-nums">
-              <Badge variant="secondary">
-                {correctCount}/{answeredCount} {answeredCount ? `(${Math.round((100 * correctCount) / answeredCount)}%)` : ""}
-              </Badge>
-              {remaining !== null && <Badge variant="outline">{remaining} left</Badge>}
-              {engineLoading.length > 0 && (
-                <Badge variant="outline" className="animate-pulse">
-                  loading {engineLoading.length}
-                </Badge>
-              )}
-            </div>
+            <div className="flex items-center gap-2 text-sm tabular-nums">{score}</div>
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -77,15 +150,18 @@ export function QuizShell({ quiz, title, idleText, questionText, feedback, extra
             ) : (
               <>
                 <Button size="lg" onClick={quiz.askNext} disabled={phase !== "answered"}>
-                  <PlayIcon /> Hear next <Kbd>Space</Kbd> <Kbd>Enter</Kbd>
+                  <PlayIcon /> Hear next <Kbd>Space</Kbd>
                 </Button>
                 <Button size="lg" variant="outline" onClick={quiz.hearAgain} disabled={phase === "loading"}>
-                  <RotateCcwIcon /> Hear again <Kbd>R</Kbd>
-                  {settings.replayLimit !== "unlimited" && phase === "question" && (
-                    <span className="text-xs text-muted-foreground">({settings.replayLimit === "one" ? Math.max(0, 1 - replays) : 0} left)</span>
-                  )}
+                  <RotateCcwIcon /> Hear again {phase === "question" && <Kbd>Space</Kbd>} <Kbd>R</Kbd>
+                  {replaysLeft}
                 </Button>
                 {phase === "answered" && extraButtons}
+                {phase === "answered" && scored && !scored.correct && (
+                  <Button size="lg" variant="outline" onClick={quiz.markCorrect}>
+                    <CheckIcon /> I was right <Kbd>C</Kbd>
+                  </Button>
+                )}
                 <Button size="lg" variant="ghost" onClick={quiz.finish} className="ml-auto">
                   <SquareIcon /> End quiz <Kbd>Esc</Kbd>
                 </Button>
@@ -104,5 +180,5 @@ export function QuizShell({ quiz, title, idleText, questionText, feedback, extra
 /** Green/red feedback banner used by every mode. */
 export function FeedbackBanner({ correct, partial, children }: { correct: boolean; partial?: boolean; children: ReactNode }) {
   const tone = correct ? "border-green-500/50 bg-green-500/10" : partial ? "border-amber-500/50 bg-amber-500/10" : "border-red-500/50 bg-red-500/10";
-  return <div className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 ${tone}`}>{children}</div>;
+  return <div className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 max-sm:gap-x-2 max-sm:gap-y-1 max-sm:px-3 max-sm:py-2 ${tone}`}>{children}</div>;
 }

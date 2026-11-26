@@ -26,13 +26,15 @@ export function useEntryShortcuts(active: boolean, onUndo: () => void, onSubmit?
   }, [active, undoRef, submitRef]);
 }
 import { noteName, PITCH_CLASS_SHORT, pitchClassOf } from "@/lib/music/notes";
+import { useIsPhone } from "@/lib/hooks/use-media";
+import { usePianoPrefs } from "@/lib/piano-prefs";
 import type { AnswerMode } from "@/lib/trainer/settings";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Kbd } from "@/components/ui/kbd";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PianoKeyboard, type KeyHighlight } from "@/components/piano-keyboard";
 import { PitchClassGrid } from "@/components/trainer/pitch-class-grid";
+import { OctaveChips } from "@/components/trainer/octave-chips";
 import { cn } from "@/lib/utils";
 
 export interface NoteEntryProps {
@@ -79,8 +81,13 @@ export function NoteEntry({
   hint,
 }: NoteEntryProps) {
   const slots = count ?? Math.max(entries.length, 1);
+  // The phone's fixed screen has room for one way of answering at a time (see piano-prefs.ts).
+  const phone = useIsPhone();
+  const phoneInput = usePianoPrefs((s) => s.phoneInput);
+  const showPiano = answerMode === "pitch-octave" && (!phone || phoneInput === "piano");
+  const showButtons = answerMode !== "pitch-octave" || !phone || phoneInput === "buttons";
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex min-h-0 shrink flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         {Array.from({ length: slots }, (_, i) => {
           const v = entries[i];
@@ -101,7 +108,8 @@ export function NoteEntry({
         })}
         {count === undefined && entries.length > slots && null}
         {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
-        <div className="ml-auto flex gap-1">
+        {/* On a phone the three buttons take a row of their own ABOVE the slots: the slots cannot be tapped, so they are what sits next to the keys. */}
+        <div className="ml-auto flex gap-1 max-md:order-first max-md:w-full max-md:justify-end">
           <Button variant="ghost" size="sm" onClick={onUndo} disabled={disabled || entries.length === 0}>
             <Undo2Icon /> Undo <Kbd>⌫</Kbd>
           </Button>
@@ -115,24 +123,9 @@ export function NoteEntry({
           )}
         </div>
       </div>
-      {answerMode === "pitch-octave" && (
-        <>
-          <PianoKeyboard low={pianoRange[0]} high={pianoRange[1]} onKey={onAdd} highlights={highlights} disabled={disabled} />
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm text-muted-foreground">
-              Octave for buttons / keys <Kbd>Z</Kbd> <Kbd>X</Kbd> <Kbd>0-8</Kbd>
-            </span>
-            <ToggleGroup variant="outline" size="sm" value={[String(octave)]} onValueChange={(v) => v[0] !== undefined && setOctave(Number(v[0]))}>
-              {Array.from({ length: 9 }, (_, o) => (
-                <ToggleGroupItem key={o} value={String(o)} className="w-8">
-                  {o}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </div>
-        </>
-      )}
-      <PitchClassGrid onSelect={(pc) => onAdd((octave + 1) * 12 + pc)} disabled={disabled} showKeys={showKeys} />
+      {showPiano && <PianoKeyboard low={pianoRange[0]} high={pianoRange[1]} onKey={onAdd} highlights={highlights} disabled={disabled} fill={phone} />}
+      {answerMode === "pitch-octave" && showButtons && <OctaveChips octave={octave} setOctave={setOctave} />}
+      {showButtons && <PitchClassGrid onSelect={(pc) => onAdd((octave + 1) * 12 + pc)} disabled={disabled} showKeys={showKeys} />}
     </div>
   );
 }

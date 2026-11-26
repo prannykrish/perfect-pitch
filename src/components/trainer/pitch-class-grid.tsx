@@ -19,7 +19,8 @@ export function PitchClassGrid({
   showKeys?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-6 gap-2 sm:grid-cols-12">
+    // One row of twelve on the laptop; two rows of six on a phone, each button a thumb wide.
+    <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-12 sm:gap-2">
       {PITCH_CLASS_LABELS.map((label, pc) => {
         const state = states[pc];
         return (
@@ -34,7 +35,8 @@ export function PitchClassGrid({
               state === "wrong" && "border-red-500 bg-red-500/15 text-red-600 dark:text-red-400"
             )}
           >
-            <span className="leading-none">{label.replace("/", "​/")}</span>
+            {/* the zero-width space lets "C♯/D♭" break after the slash where the button is narrow */}
+            <span className="text-center leading-none max-sm:leading-tight max-sm:whitespace-normal">{label.replace("/", "/\u200b")}</span>
             {showKeys && <Kbd className="h-4 min-w-4 text-[10px]">{PC_KEYS[pc]}</Kbd>}
           </Button>
         );

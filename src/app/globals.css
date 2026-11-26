@@ -3,6 +3,8 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+/* A finger, not a mouse (phones, tablets). `touch:hidden` hides keyboard hints there. */
+@custom-variant touch (@media (hover: none));
 
 @theme inline {
   --color-background: var(--background);
@@ -166,5 +168,34 @@
   }
   html {
     @apply font-sans;
+    /* Taps act at once: no double-tap zoom, so no wait to see whether a second tap is coming. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    /* Installed on a phone the page runs edge to edge; keep clear of the notch and the rounded corners. */
+    padding-top: env(safe-area-inset-top);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  /* The phone's quiz screen (phone-stage.tsx) is one fixed screen: the page behind it must not scroll or bounce. */
+  html.stage-locked,
+  html.stage-locked body {
+    overflow: hidden;
+    overscroll-behavior: none;
+    height: 100%;
+  }
+  /* Controls sized for a mouse are too small for a thumb. Only where the main pointer is a finger. */
+  @media (pointer: coarse) {
+    [data-slot="button"],
+    [data-slot="toggle-group-item"],
+    [data-slot="select-trigger"] {
+      min-height: 2.25rem;
+      min-width: 2.25rem;
+    }
+    [data-slot="tabs-list"] {
+      min-height: 2.5rem;
+    }
   }
 }

@@ -184,6 +184,7 @@ export function IntervalQuiz() {
   return (
     <QuizShell
       quiz={quiz}
+      tallFeedback
       title="Intervals"
       idleText={
         settings.intervalVariant === "pair"
@@ -290,7 +291,7 @@ export function IntervalQuiz() {
             );
           })}
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="touch:hidden text-xs text-muted-foreground">
           Or play the notes on the USB piano: {settings.intervalVariant === "pair" ? "two notes" : settings.intervalVariant === "chain" ? "the whole sequence" : "the whole stack, bottom to top"} and the app grades the
           distances, not the notes.
         </p>

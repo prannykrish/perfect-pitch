@@ -11,7 +11,7 @@ Personal ear-training platform for Pranav, who has absolute pitch. Goal: thousan
 
 At the end of every session, update `docs/PROGRESS.md` (done / next / known issues / session log). Add to the decisions log in PLAN.md when a product decision is made. Do not start a new phase without checking the previous phase's acceptance criteria.
 
-How Pranav works: he wants each phase explained in plain language before it is built, then says "go" (or names the phase) and expects the whole phase built in one go, verified (self-tests, tsc, lint, build), with a plain summary of what to try. If PROGRESS.md says a phase has already been explained and agreed, build it without re-explaining. Audio and MIDI can only be verified by him in a real Chrome/Edge window; say plainly what was and was not verified.
+How Pranav works: he wants each phase explained in plain language before it is built, then says "go" (or names the phase, e.g. **"phase: levels"**) and expects the whole phase built in one go, verified (self-tests, tsc, lint, build), with a plain summary of what to try. If PROGRESS.md says a phase has already been explained and agreed, build it without re-explaining or asking anything: the spec is in PLAN.md. Audio and MIDI can only be verified by him in a real Chrome/Edge window; say plainly what was and was not verified.
 
 ## Stack (do not change without updating PLAN.md)
 
@@ -34,7 +34,19 @@ Every trainer mode is a small adapter (`generate / play / score / log / record`)
 
 ## Find the Mistake (Phase 5), Head to Keys (Phase 6), Practice & Learn (Phase 7)
 
-`src/lib/mistakes/` (types, pure planting in `plant.ts`, material builders) with `src/components/mistakes/`. `src/lib/compose/` (theory tasks and grading in `theory.ts`, prompts, hum segmentation, mic pitch tracking) with `src/components/compose/`. `src/lib/practice/` (plans + starter programme in `plan.ts`, skills in `skills.ts`), `src/lib/learn/content.ts` (lessons + glossary, static data) with `src/components/practice/`. Each has a self-test script under `scripts/`; `npm run selftest` runs them all. Plan items open a tab with `?mode=` / `?tab=` query strings handled in the tab layouts.
+`src/lib/mistakes/` (types, pure planting in `plant.ts`, material builders) with `src/components/mistakes/`. `src/lib/compose/` (theory tasks and grading in `theory.ts`, prompts, hum segmentation, mic pitch tracking) with `src/components/compose/`. `src/lib/practice/` (the ladder: `levels.ts` definitions with settings patches and gates, `gates.ts` evaluation, `level-run.ts` the active run that tags reps; `plan.ts` manual day items; `skills.ts` the Progress skills; `difficulty.ts` the per-activity difficulty dials, rendered by `src/components/practice/difficulty-dial.tsx` at the top of each settings card), `src/lib/learn/content.ts` (lessons + glossary, static data) with `src/components/practice/` (`level-card.tsx`, `level-run-bar.tsx`). Each has a self-test script under `scripts/`; `npm run selftest` runs them all. Plan items open a tab with `?mode=` / `?tab=` query strings handled in the tab layouts. Every `logAttempt` call spreads `levelTags(store)` so reps done from a level count toward its gate; keep that when adding a mode. With "Always count" on (`/settings`, `src/lib/practice/count-prefs.ts`), `levelTags` also tags reps whose settings match a level drill's test (`src/lib/practice/auto-count.ts`), no Start needed.
+
+## The phone (Phase 8a)
+
+The same app, laid out for an iPhone below `md` and installable from Safari. iOS has no Web MIDI, so the phone is the hearing half (Trainer, Mistakes, Practice, Stats); the two piano tabs stay on the laptop. Keep the laptop layout unchanged when touching any of this.
+
+- **The stage** (`src/components/phone-stage.tsx`): on a phone the Trainer and Find the Mistake are one fixed screen that never scrolls and never rearranges itself, because Pranav found the scrolling version flimsy ("my hand can slip and easily move things around"). `QuizShell` and `MistakesTrainer` render `PhoneStage` when `useIsPhone()`; everything that is not the question (level bar, modes, settings, page links) is in `StagePanel`, the sheet behind the ☰ button. Rules to keep: every row above the answer has a set height and the text row takes the slack, so the keys, the strip and the Hear buttons sit in the same place at idle, in a question and after an answer; nothing tappable sits next to the keys; the tab bar hides while a quiz runs but its space stays empty (`src/lib/stage-store.ts`); only one way of answering a note is on screen (`phoneInput` in `piano-prefs.ts`). An answer UI that holds a piano needs a root of `flex min-h-0 shrink flex-col` and `<PianoKeyboard fill>`. When adding a mode or a button, check those positions do not move.
+- Sizing trap, hit twice: a box sized from its content, whose content is drawn from the box's measured size, never shrinks. The piano uses CSS containment for that (`contain-inline-size`, and `contain-size` with `fill`); do the same for anything else that measures itself.
+- Two switches, do not mix them up: **width** (`useIsPhone()`, Tailwind `max-md:` / `md:`) decides the shell: bottom tab bar in `app-nav.tsx`, the stage and its panel, and for the two piano tabs settings as a bottom sheet through `SettingsToggle` in `settings-drawer.tsx`. **Touch** (`useIsTouch()`, the `touch:` variant = `@media (hover: none)`) decides what a finger needs: the windowed piano, hidden `Kbd` hints (`touch:hidden` is in the `Kbd` component itself), the 36 px tap floor in `globals.css`, fewer instruments in memory.
+- The piano: `src/components/piano-keyboard.tsx` draws either the whole keyboard or, on touch when it cannot fit at 24 px a key, a window with octave arrows and an overview strip. Pure geometry (window bounds, clamping to a C, finger hit-testing) is in `src/lib/music/keyboard.ts`; run `npx tsx scripts/selftest-keyboard.mts` after touching it. Window size, position and "Confirm taps" are per-device prefs in `src/lib/piano-prefs.ts`, never trainer settings (the level gates must not see them). The window must never move by itself during a question.
+- Audio on iOS: `engine.unlock()` inside every tap and `engine.wake()` on return to the screen (both wired in `audio-watch.tsx`); `src/lib/audio/device.ts` for the silent switch (audio session) and device checks; a touch device keeps 4 instruments decoded (97 MB each), pools of 3.
+- Install: `src/app/manifest.ts`, icons in `public/icons/` (`npm run icons`), metadata and viewport in `layout.tsx`.
+- He tests over Wi‑Fi: `npm run dev:lan`, the Network address in Safari. `next.config.ts` lists the machine's network addresses in `allowedDevOrigins`. Sound, Add to Home Screen and thumb-sized targets can only be verified by him on the phone; layout can be checked in a headless Chrome with an iPhone profile (see PROGRESS.md → Handoff), with the quiz's server-action POSTs blocked so his practice database is not written to.
 
 ## Conventions
 
@@ -48,6 +60,8 @@ Every trainer mode is a small adapter (`generate / play / score / log / record`)
 
 ```
 npm run dev          # http://localhost:3000 (Chrome/Edge for Web MIDI)
+npm run dev:lan      # same, for the phone on the same Wi‑Fi: open the "Network" address it prints
+npm run icons        # redraw the home-screen icons into public/icons (committed)
 npm run build        # production build (also the main type check)
 npm run lint
 npm run samples      # download soundfonts (once)

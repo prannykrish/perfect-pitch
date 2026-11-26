@@ -8,6 +8,7 @@
  * USB piano: playing a note fills in the "fix" note when one is asked for.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimKey } from "@/lib/keys";
 import { toast } from "sonner";
 import { getEngine, useEngineStore } from "@/lib/audio/engine";
 import { getInstrument, instrumentLabel } from "@/lib/audio/instruments";
@@ -16,6 +17,7 @@ import { beatsToMs } from "@/lib/music/score";
 import { pitchClassOf } from "@/lib/music/notes";
 import { useLatest } from "@/lib/hooks/use-latest";
 import { endSession, logAttempt, startSession } from "@/lib/db/actions";
+import { levelTags } from "@/lib/practice/level-run";
 import { useMistakesSettings, type MistakesSettings } from "@/lib/mistakes/settings";
 import { assignInstruments, buildQuestion, enabledTypes } from "@/lib/mistakes/material";
 import { canSubmit, diagnosesFor, plantedOf, scoreAnswer } from "@/lib/mistakes/plant";
@@ -310,6 +312,7 @@ export function useMistakesQuiz() {
       score: result.score,
       responseMs,
       replays: replaysRef.current,
+      ...levelTags("mistakes"),
     }).catch((err) => console.warn("logAttempt failed", err));
 
     // Right: move on after a short pause. Wrong: hold the feedback until Space / Enter / click.
@@ -384,7 +387,7 @@ export function useMistakesQuiz() {
       const p = phaseRef.current;
       const a = askedRef.current;
       if (e.code === "Space") {
-        e.preventDefault();
+        claimKey(e);
         if (p === "idle" || p === "ended") start();
         else if (p === "answered") askNext();
         else if (p === "question") hearAgain();

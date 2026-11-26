@@ -94,7 +94,7 @@ export function AnswerTimeline({ asked, draft, phase, scored, onPatch, onSubmit,
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <Label className="text-xs text-muted-foreground">{drift ? "Which voice? (the beat does not matter for a drift)" : `Which ${slotWord}?`}</Label>
-          <span className="text-xs text-muted-foreground">
+          <span className="touch:hidden text-xs text-muted-foreground">
             <Kbd>1</Kbd>–<Kbd>9</Kbd> <Kbd>0</Kbd> = {slotWord} 10
           </span>
         </div>
@@ -276,7 +276,10 @@ function SubmitRow({ canSubmit, onSubmit, onClear, hasDraft }: { canSubmit: bool
       <Button variant="ghost" onClick={onClear} disabled={!hasDraft}>
         <Undo2Icon /> Clear <Kbd>⌫</Kbd>
       </Button>
-      <span className="text-xs text-muted-foreground">Answers submit on their own once nothing optional is left; press Enter to skip the bonus.</span>
+      <span className="text-xs text-muted-foreground">
+        Answers submit on their own once nothing optional is left; <span className="touch:hidden">press Enter</span>
+        <span className="touch:inline hidden">tap Answer</span> to skip the bonus.
+      </span>
     </div>
   );
 }

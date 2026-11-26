@@ -22,6 +22,8 @@ export interface ProbeResult {
 
 export interface SampleCapability {
   status: "ok" | "unavailable";
+  /** Set when the streamed sets are left out on purpose (a phone) rather than because nothing decodes. */
+  reason?: "phone";
   /** Format to request from the CDN, or null when nothing decodes. */
   format: SampleFormat | null;
   localOpus: ProbeResult;

@@ -104,6 +104,84 @@ export const LESSONS: Lesson[] = [
     ],
   },
   {
+    id: "registers-and-octaves",
+    title: "Registers: placing the octave",
+    area: "foundations",
+    summary: "Why the note comes instantly and the octave does not, and how to make the octave just as automatic.",
+    skill: "octaves",
+    sections: [
+      {
+        heading: "Two different judgements",
+        body: [
+          "Naming the pitch class is a recognition: the sound has a colour you know, like a face. Placing the octave is an estimate of height, and height is carried by different cues: how much bass energy there is, how bright the overtones are, how the sound's attack behaves. On a piano those cues are consistent, so the octave should become as automatic as the name. It just has to be trained on purpose, because the name arrives first and the mind is happy to stop there.",
+          "That is why level 0 is octaves only, on one instrument, across the whole keyboard. Every rep asks for both, and the gate looks at every octave separately so a weak register cannot hide behind a strong average.",
+        ],
+        examples: [seq("C in every octave from C1 to C7", [24, 36, 48, 60, 72, 84, 96], 500), seq("A2, A3, A4, A5: same name, four heights", [45, 57, 69, 81], 550)],
+        terms: [
+          { term: "Register", definition: "A range of pitches: low, middle, high; or an instrument's sub-ranges." },
+          { term: "Octave error", definition: "Naming the right pitch class in the wrong octave; the most common mistake for absolute pitch." },
+        ],
+      },
+      {
+        heading: "Anchors that help",
+        body: [
+          "Middle C (C4, MIDI 60) is the anchor: the C nearest the middle of the keyboard, the note where the octave number flips. Two more anchors bracket it: A4 at 440 Hz just above, and C3 an octave below, which is where the piano's low mid starts to get thick. Fix those three in your body (where you would hum them, how they sit in your chest or head) and every other note is 'a bit above C4' or 'the A below C3'.",
+          "Register has a feel: notes below C3 have weight and a slow-blooming attack, notes above C6 are thin, ringing and short. Before you answer the octave, ask which of those feelings the note gave you, then place it relative to the nearest anchor.",
+        ],
+        examples: [seq("The three anchors: C3, C4, A4", [48, 60, 69], 700), seq("Neighbours of C4: B3, C4, D4", [59, 60, 62], 500)],
+        terms: [{ term: "Anchor", definition: "A reference pitch you can recall by feel (C4, A4) used to place other notes." }],
+      },
+      {
+        heading: "The traps",
+        body: [
+          "Extreme octaves are hardest: below A1 the pitch is felt more than heard, above C7 it turns into a whistle. Practise them as their own thing. Short notes give fewer cycles to judge, so the trainer's note length is a real dial: shorten it only after the long notes are automatic. And when the trainer moves to other instruments in level 1, expect the octave to wobble again on sounds with strong or missing overtones; that is the point of doing it.",
+          "One thing to know about the app's piano: its samples for the bottom ten keys (A0 to G♭1) were measured to have almost no fundamental, 36 to 41 dB below the overtones, so on their own they sound like the octave above with a fifth on top, which is not what a real piano does. The app adds the fundamental back under those keys (Settings → 'Reinforce the piano's lowest keys'), but that only helps if your playback can reproduce it: laptop speakers put out nothing below roughly 80 to 100 Hz and most earbuds fall off under 40 to 50 Hz, while A0 is 27.5 Hz and G♭1 is 46 Hz. On such speakers every note below about C2 reaches you as overtones only, and the bottom ten keys reach you as the octave above. That is why level 0 starts at G1, and why those ten keys have their own drill at level 2: do that one on headphones or speakers that reach 30 Hz if you can, and if you cannot, know that naming the note from its overtones is exactly what a producer does on small monitors. The tuning of every key was measured to be within a few cents; the ambiguity you may have felt down there was the missing fundamental, not the tuning.",
+        ],
+      },
+    ],
+    drills: [{ label: "Level 0: single note, piano, pitch + octave", href: "/calendar", hint: "Start it from the level card so the reps count." }],
+  },
+  {
+    id: "how-the-ladder-works",
+    title: "How the ladder works",
+    area: "practice",
+    summary: "What a level is, what a gate is, why reps only count when started from the level card, and how to read the card.",
+    sections: [
+      {
+        heading: "Levels, drills, gates",
+        body: [
+          "A level is a bundle of drills, each with fixed settings and a mastery gate. You stay on a level until every gate holds; time does not move you on, reps at the right difficulty do. A gate looks at a rolling window of your most recent reps for that drill, so early misses stop counting once they fall out of the window and a good afternoon cannot pass you either. It also demands that the window spans at least three practice days, which makes it retention rather than a streak, and where it matters it checks every octave, interval, chord quality or scale on its own.",
+          "Each level also keeps a few drills from earlier levels as reviews with a smaller daily dose. Their gate must still hold, over half the window, for the level to close. A block that goes shaky gets rebuilt before you build on it.",
+        ],
+        terms: [
+          { term: "Gate", definition: "The mastery condition for a drill: a rolling window of reps at an accuracy floor, spread over days and, where relevant, over every key." },
+          { term: "Rolling window", definition: "The most recent N reps; older ones stop counting as new ones arrive." },
+        ],
+      },
+      {
+        heading: "Why only reps from the card count",
+        body: [
+          "Pressing Start on the card writes the drill's settings into the tab and marks a level run. Every rep logged while those settings are untouched is tagged with the level and drill, and only tagged reps feed the gates. Change one of those settings by hand and the bar at the top of the tab turns amber: reps stop counting until you re-apply. Free practice at any settings is always available; it simply does not move a gate. This is what keeps the ladder honest.",
+        ],
+      },
+      {
+        heading: "Reading the card",
+        body: [
+          "Each drill shows the reps in its window, the accuracy over them, the days covered, and what is still open in plain words. The coloured chips are the spread: green keys pass, red keys are below the floor, grey keys have not been heard enough yet. The daily number is a suggestion sized so a level takes a week or two at a normal pace; more is fine. When every gate, review and lesson is ticked, the card turns green and offers Advance. Press it when the level feels automatic, not the moment it unlocks.",
+        ],
+      },
+      {
+        heading: "Difficulty dials are the playground",
+        body: [
+          "At the top of every settings panel sits a dial numbered 1 to 8 (4 for Hum then play). Each number is a full set of settings, and every step adds exactly one new demand on top of the one before: chords level 1 is major and minor triads on piano, level 3 adds sus chords with inversions played but not asked, level 8 is every note of any chord or cluster on any instrument. Pick a number and every setting it covers is written at once, so you never land in a half-sensible state.",
+          "Change one of those settings by hand and the dial reads custom; pick the number again to restore it. The dial is free practice: it never moves you up the ladder, and using it during a level run counts as a hand edit, so the bar turns amber and reps stop counting until you re-apply. (With Always count on, a rep still counts if the settings happen to be exactly a drill's test; the bar at the top always tells you which.)",
+        ],
+        terms: [{ term: "Difficulty dial", definition: "A numbered preset per activity that writes a coherent bundle of settings; free practice beside the ladder, showing custom after a hand edit." }],
+      },
+    ],
+    drills: [{ label: "Open the level card", href: "/calendar", hint: "Practice & Learn, Calendar tab." }],
+  },
+  {
     id: "intervals",
     title: "Intervals",
     area: "foundations",
@@ -158,7 +236,8 @@ export const LESSONS: Lesson[] = [
     id: "scales-and-modes",
     title: "Scales, keys and modes",
     area: "foundations",
-    summary: "The note collections most music is built from, what makes each one sound the way it does, and the names of the degrees.",
+    summary: "The note collections most music is built from, what makes each one sound the way it does, the names of the degrees, and how to tell them apart by ear.",
+    skill: "scales",
     sections: [
       {
         heading: "Major and the minor family",
@@ -214,8 +293,25 @@ export const LESSONS: Lesson[] = [
           { term: "Whole-tone scale", definition: "Six notes two semitones apart; symmetrical, no leading tone." },
         ],
       },
+      {
+        heading: "Hearing which scale it is",
+        body: [
+          "With absolute pitch you can list the notes of anything you hear, so naming a scale is really two questions: which note is home, and which one or two notes give the collection away. Home is where the melody keeps landing and where it ends; in a run it is simply the first note. Then check the give-away notes. Major: major 3rd and a leading tone. Natural minor: minor 3rd, flat 6th, flat 7th. Harmonic minor: flat 6th but a leading tone, so a gap of three semitones between them. Melodic minor: minor 3rd with a major 6th and 7th. Dorian: minor with a raised 6th. Phrygian: a flat 2nd right above home. Lydian: major with a raised 4th. Mixolydian: major with a flat 7th. Locrian: flat 2nd and no perfect fifth. Pentatonics: only five notes and no half steps. Blues: minor pentatonic plus the flat 5th. Whole tone: only whole steps, no fifth. Diminished: half and whole steps alternating.",
+          "The trap is collections that share notes. C major, A natural minor and D dorian are the same seven notes; the difference is where home is. So decide the tonic first, then the type. The Scales & modes trainer plays either a straight run (the tonic is the first note, so it is purely a type question) or a short melody that has to contain the give-away notes and ends on home, which is the real-world version. When you get the notes right but the home wrong, it tells you so.",
+        ],
+        examples: [
+          seq("Same notes, different home: C major, then A natural minor, then D dorian", [60, 62, 64, 65, 67, 69, 71, 72, 69, 71, 72, 74, 76, 77, 79, 81, 62, 64, 65, 67, 69, 71, 72, 74], 240),
+          seq("Harmonic minor's give-away: the three-semitone gap ♭6 to 7 (A minor: F to G♯)", [57, 59, 60, 62, 64, 65, 68, 69], 320),
+          seq("Lydian's give-away: the raised 4th (F lydian: B natural)", [65, 67, 69, 71, 72, 74, 76, 77], 320),
+        ],
+        terms: [
+          { term: "Characteristic note", definition: "The scale degree that marks a scale or mode out from its nearest relatives, e.g. the raised 6th of dorian." },
+          { term: "Parallel key", definition: "The major and minor with the same tonic (C major and C minor)." },
+        ],
+      },
     ],
     drills: [
+      { label: "Scales & modes: hear it, name it", href: "/trainer?mode=scales", hint: "Runs first with the tonic asked, then melodies, then narrow the set to the pairs you confuse." },
       { label: "Theory drills: scales and modes", href: "/compose?tab=theory", hint: "Levels 1–3 ask for scales up, down and both ways." },
       { label: "Hear It, Play It in a mode", href: "/transcribe", hint: "Generated phrases in dorian or mixolydian." },
     ],

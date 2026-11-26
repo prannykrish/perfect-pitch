@@ -7,6 +7,7 @@
  * you go.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimKey } from "@/lib/keys";
 import { toast } from "sonner";
 import { PlayIcon, SquareIcon } from "lucide-react";
 import { getEngine } from "@/lib/audio/engine";
@@ -15,6 +16,7 @@ import { beatsToMs, pieceNotes, type Piece, type ScoreNote } from "@/lib/music/s
 import { useTranscribeSettings } from "@/lib/transcribe/settings";
 import { effectiveVoices, loadSourcePiece } from "@/lib/transcribe/sources";
 import { logAttempt } from "@/lib/db/actions";
+import { levelTags } from "@/lib/practice/level-run";
 import { useLatest } from "@/lib/hooks/use-latest";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -67,6 +69,7 @@ export function ShadowMode() {
         correct: passed > 0 && st.matched === passed && st.wrong === 0 && st.extra === 0,
         score: passed ? st.matched / passed : 0,
         responseMs: Math.round(nowRef.current),
+        ...levelTags("transcribe"),
       }).catch(() => {});
     }
   }, [settingsRef, piece]);
@@ -164,7 +167,7 @@ export function ShadowMode() {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
       if (e.code === "Space") {
-        e.preventDefault();
+        claimKey(e);
         if (phaseRef.current === "idle" || phaseRef.current === "done") start();
         else if (phaseRef.current === "playing") stop(false);
       } else if (e.key === "Escape" && phaseRef.current === "playing") stop(false);

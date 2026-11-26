@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { InstrumentSelect } from "@/components/instrument-select";
 import { MidiPanel } from "@/components/midi-panel";
+import { DifficultyDial } from "@/components/practice/difficulty-dial";
 
 const KEYS: Record<string, string> = { "-1": "Random key", ...Object.fromEntries(PITCH_CLASS_SHORT.map((n, i) => [String(i), n])) };
 const LEVELS: Record<string, string> = Object.fromEntries(Array.from({ length: MAX_LEVEL }, (_, i) => [String(i + 1), `${i + 1} · ${LEVEL_LABELS[i + 1]}`]));
@@ -80,6 +81,7 @@ export function ComposeSettingsPanel() {
 
         <section className="flex flex-col gap-2">
           <Label>Theory drills</Label>
+          <DifficultyDial id="theory" label="Difficulty" />
           <Label className="text-xs text-muted-foreground">Level</Label>
           <SelectField value={String(s.theoryLevel)} items={LEVELS} onChange={(v) => update({ theoryLevel: Number(v) })} />
           <SwitchRow checked={s.theoryMixLower} onChange={(v) => update({ theoryMixLower: v })}>
@@ -108,6 +110,7 @@ export function ComposeSettingsPanel() {
 
         <section className="flex flex-col gap-2">
           <Label>Prompt drill</Label>
+          <DifficultyDial id="prompt" label="Difficulty" />
           <SelectField value={String(s.promptKey)} items={KEYS} onChange={(v) => update({ promptKey: Number(v) })} />
           <Label className="flex justify-between">
             <span>Tempo range</span>
@@ -147,6 +150,7 @@ export function ComposeSettingsPanel() {
 
         <section className="flex flex-col gap-2">
           <Label>Hum then play</Label>
+          <DifficultyDial id="hum" label="Difficulty" />
           <SwitchRow checked={s.humOctaveInsensitive} onChange={(v) => update({ humOctaveInsensitive: v })}>
             Accept the right note in any octave
           </SwitchRow>

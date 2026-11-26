@@ -6,8 +6,10 @@ import { bassPitchClass, buildChord, chordLabel, chordPitchClasses, CHORD_QUALIT
 import { intervalPool, intervalShort } from "../src/lib/music/intervals";
 import { noteName } from "../src/lib/music/notes";
 import { DEFAULT_TRAINER_SETTINGS, type TrainerSettings } from "../src/lib/trainer/settings";
-import { generateCents, generateChord, generateInterval, generateSequence } from "../src/lib/trainer/generators";
+import { generateCents, generateChord, generateInterval, generateScale, generateSequence } from "../src/lib/trainer/generators";
 import { emptyMissStats } from "../src/lib/trainer/quiz-core";
+import { SCALE_DEFS, scaleDef, scaleMelody, scalePitchClasses, scaleRun } from "../src/lib/music/scales";
+import { pitchClassOf } from "../src/lib/music/notes";
 
 let failures = 0;
 function check(cond: boolean, msg: string) {
@@ -96,6 +98,36 @@ const stats = emptyMissStats();
       if (variant !== "single") check(q.detunedIndex >= 0 && q.detunedIndex < q.notes.length && q.cents !== 0, `cents index ${q.detunedIndex}`);
     }
   }
+  // ---- scales & modes ----
+  for (const def of SCALE_DEFS) {
+    check(def.intervals[0] === 0 && def.intervals.every((x, i) => i === 0 || x > def.intervals[i - 1]) && def.intervals.every((x) => x < 12), `scale ${def.id} intervals`);
+    check(def.characteristic.every((c) => def.intervals.includes(c)), `scale ${def.id} characteristic notes belong to it`);
+    const run = scaleRun(def.id, 60, "asc");
+    check(run[0] === 60 && run[run.length - 1] === 72 && run.length === def.intervals.length + 1, `run ${def.id}`);
+    const both = scaleRun(def.id, 60, "both");
+    check(both[0] === 60 && both[both.length - 1] === 60 && both.length === 2 * def.intervals.length + 1, `run both ${def.id}`);
+    for (let i = 0; i < 40; i++) {
+      const tonic = i % 12;
+      const mel = scaleMelody(def.id, tonic, { notes: 8, low: 55, high: 84 });
+      const pcs = scalePitchClasses(tonic, def.id);
+      check(mel.length === 8 && mel.every((n) => pcs.has(pitchClassOf(n.midi)) && n.midi >= 55 && n.midi <= 84), `melody ${def.id} in scale`);
+      check(pitchClassOf(mel[0].midi) === tonic && pitchClassOf(mel[mel.length - 1].midi) === tonic && mel[mel.length - 1].duration === 2, `melody ${def.id} starts and ends on the tonic`);
+      for (const c of def.characteristic) check(mel.some((n) => pitchClassOf(n.midi) === (tonic + c) % 12), `melody ${def.id} contains characteristic ${c}`);
+      check(mel.every((n, j) => j === 0 || n.beat > mel[j - 1].beat), `melody ${def.id} beats increase`);
+    }
+  }
+  for (const variant of ["run", "melody", "both"] as const) {
+    for (let i = 0; i < 120; i++) {
+      const q = await generateScale({ ...settings, scaleVariant: variant, scaleSet: i % 2 ? ["dorian", "lydian", "blues"] : [] }, choose, stats);
+      const def = scaleDef(q.scaleId)!;
+      check(!!def && (i % 2 === 0 || ["dorian", "lydian", "blues"].includes(q.scaleId)), `scale set respected: ${q.scaleId}`);
+      check(q.notes.every((n) => n.midi >= 21 && n.midi <= 108 && n.at >= 0 && n.duration > 0), `scale question range ${q.notes.map((n) => n.midi)}`);
+      check(q.notes.every((n) => scalePitchClasses(q.tonic, q.scaleId).has(pitchClassOf(n.midi))), `scale question notes in scale ${q.scaleId}`);
+      if (q.variant === "run") check(pitchClassOf(q.notes[0].midi) === q.tonic && q.notes.length >= def.intervals.length + 1, `run question starts on the tonic`);
+      if (variant !== "both") check(q.variant === variant, "variant respected");
+    }
+  }
+
   console.log(failures ? `${failures} checks failed` : "all generator checks passed");
   process.exit(failures ? 1 : 0);
 })();

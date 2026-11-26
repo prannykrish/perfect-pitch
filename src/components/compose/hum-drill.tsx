@@ -5,6 +5,7 @@
  * hummed notes are the reference and the take is graded with the transcription grader.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimKey } from "@/lib/keys";
 import { toast } from "sonner";
 import { CheckIcon, MicIcon, PlayIcon, SquareIcon, Volume2Icon, XIcon } from "lucide-react";
 import { getEngine } from "@/lib/audio/engine";
@@ -15,6 +16,7 @@ import { PitchTracker } from "@/lib/compose/pitch-track";
 import { gradePerformance, type GradeResult, type PlayedNote } from "@/lib/trainer/grade";
 import type { PlayedEvent } from "@/lib/compose/theory";
 import { endSession, logAttempt, startSession } from "@/lib/db/actions";
+import { levelTags } from "@/lib/practice/level-run";
 import { useLatest } from "@/lib/hooks/use-latest";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -186,6 +188,7 @@ export function HumDrill() {
         score: r.pitchScore,
         responseMs: firstNoteMs,
         replays: 0,
+        ...levelTags("compose"),
       }).catch(() => {});
     },
     [phaseRef, settingsRef]
@@ -219,7 +222,7 @@ export function HumDrill() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const p = phaseRef.current;
       if (e.code === "Space") {
-        e.preventDefault();
+        claimKey(e);
         if (p === "idle" || p === "ended") start();
         else if (p === "graded") startHumming();
       } else if (e.key === "Enter") {

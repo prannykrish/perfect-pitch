@@ -149,9 +149,17 @@ export function samePitchClasses(a: Set<number>, b: Set<number>): boolean {
   return true;
 }
 
-/** Pick a random chord spec from the enabled categories and voicings. */
-export function randomChordSpec(opts: { categories: ChordCategory[]; inversions: boolean; voicings: Voicing[] }): ChordSpec {
-  const pool = CHORD_QUALITIES.filter((q) => opts.categories.length === 0 || opts.categories.includes(q.category));
+/** The qualities a question may use: the enabled categories, narrowed to `qualities` when any of those ids are in them. */
+export function chordQualityPool(categories: ChordCategory[], qualities: string[] = []): ChordQuality[] {
+  const pool = CHORD_QUALITIES.filter((q) => categories.length === 0 || categories.includes(q.category));
+  if (!qualities.length) return pool;
+  const narrowed = pool.filter((q) => qualities.includes(q.id));
+  return narrowed.length ? narrowed : pool;
+}
+
+/** Pick a random chord spec from the enabled categories (optionally narrowed to quality ids) and voicings. */
+export function randomChordSpec(opts: { categories: ChordCategory[]; inversions: boolean; voicings: Voicing[]; qualities?: string[] }): ChordSpec {
+  const pool = chordQualityPool(opts.categories, opts.qualities);
   const q = pool.length ? pool[randomInt(0, pool.length - 1)] : CHORD_QUALITIES[0];
   const n = q.intervals.length;
   const inversion = opts.inversions ? randomInt(0, Math.min(n - 1, 3)) : 0;

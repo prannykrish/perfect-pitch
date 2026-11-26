@@ -21,6 +21,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { InstrumentSelect } from "@/components/instrument-select";
 import { MidiPanel } from "@/components/midi-panel";
 import { UploadPiece } from "@/components/transcribe/upload-piece";
+import { DifficultyDial } from "@/components/practice/difficulty-dial";
 
 const SOURCES: Record<SourceKind, string> = { generated: "Generated phrases", bach: "Bach chorales (382)", upload: "My MIDI files" };
 const DRILLS: Record<DrillKind, string> = { echo: "Phrase echo (random phrase each time)", ladder: "Ladder (length grows as you pass)", chunk: "Chunk mode (walk through the piece)" };
@@ -95,6 +96,8 @@ export function TranscribeSettingsPanel() {
         <CardTitle>Settings</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <DifficultyDial id="transcribe" />
+        <Separator />
         <section className="flex flex-col gap-2">
           <Label>Drill</Label>
           <SelectField value={s.drill} items={DRILLS} onChange={(v) => update({ drill: v })} />

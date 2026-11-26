@@ -8,6 +8,7 @@ import {
   buildChord,
   CHORD_CATEGORY_LABELS,
   CHORD_QUALITIES,
+  chordQualityPool,
   chordLabel,
   chordPitchClasses,
   chordQuality,
@@ -197,8 +198,9 @@ export function ChordQuiz() {
 
   const qualities = useMemo(() => {
     const cats = settings.chordCategories.length ? settings.chordCategories : (Object.keys(CHORD_CATEGORY_LABELS) as ChordCategory[]);
-    return cats.map((c) => ({ category: c, items: CHORD_QUALITIES.filter((q) => q.category === c) })).filter((g) => g.items.length);
-  }, [settings.chordCategories]);
+    const pool = new Set(chordQualityPool(settings.chordCategories, settings.chordQualities).map((q) => q.id));
+    return cats.map((c) => ({ category: c, items: CHORD_QUALITIES.filter((q) => q.category === c && pool.has(q.id)) })).filter((g) => g.items.length);
+  }, [settings.chordCategories, settings.chordQualities]);
 
   const hearAnswer = () => {
     if (!question || !answer) return;
@@ -280,6 +282,7 @@ export function ChordQuiz() {
   return (
     <QuizShell
       quiz={quiz}
+      tallFeedback
       title="Chords & clusters"
       idleText={
         settings.chordKind === "clusters"
@@ -369,7 +372,7 @@ export function ChordQuiz() {
                   setRootPc(pc);
                   trySubmitRQ(pc, qualityId, inversion);
                 }}
-                className={cn("h-10 font-semibold", phase === "answered" && question?.spec?.rootPc === pc && "border-green-500")}
+                className={cn("h-10 font-semibold max-sm:h-12", phase === "answered" && question?.spec?.rootPc === pc && "border-green-500")}
               >
                 {name}
               </Button>
@@ -419,7 +422,7 @@ export function ChordQuiz() {
               </div>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">Or play the chord on the USB piano and the app identifies it.</p>
+          <p className="touch:hidden text-xs text-muted-foreground">Or play the chord on the USB piano and the app identifies it.</p>
         </div>
       )}
     </QuizShell>

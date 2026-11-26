@@ -1,0 +1,5 @@
+# Kept off Vercel (also when deploying with the CLI): local samples, the local database, secrets.
+/public/soundfonts
+/public/streamed
+/data
+.env*

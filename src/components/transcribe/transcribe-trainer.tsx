@@ -6,6 +6,7 @@
  * Drills: echo (random phrase), ladder (length grows with success), chunk (walk through a piece).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimKey } from "@/lib/keys";
 import { toast } from "sonner";
 import { CheckIcon, XIcon, PlayIcon, RotateCcwIcon, SquareIcon, Volume2Icon, EyeIcon, SkipForwardIcon } from "lucide-react";
 import { getEngine } from "@/lib/audio/engine";
@@ -17,6 +18,7 @@ import { gradePerformance, type GradeResult, type PlayedNote } from "@/lib/train
 import { useTranscribeSettings } from "@/lib/transcribe/settings";
 import { generatedPhrase, loadSourcePiece, piecePhrases } from "@/lib/transcribe/sources";
 import { endSession, getPieceProgress, logAttempt, recordPhraseResult, startSession } from "@/lib/db/actions";
+import { levelTags } from "@/lib/practice/level-run";
 import { useLatest } from "@/lib/hooks/use-latest";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -218,6 +220,7 @@ export function TranscribeTrainer() {
       score: r.score,
       responseMs,
       replays: 0,
+      ...levelTags("transcribe"),
     }).catch(() => {});
 
     if (s.drill === "chunk" && p.pieceId && p.phraseIndex !== undefined) recordPhraseResult(p.pieceId, p.phraseIndex, r.score).catch(() => {});
@@ -298,7 +301,7 @@ export function TranscribeTrainer() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const p = phaseRef.current;
       if (e.code === "Space") {
-        e.preventDefault();
+        claimKey(e);
         if (p === "idle" || p === "ended") start();
         else if (p === "graded") next();
         else if (p === "recording") hearAgain();

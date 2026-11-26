@@ -5,6 +5,7 @@
 import { bassPitchClass, buildChord, chordSpan, randomChordSpec, randomCluster, type ChordSpec } from "@/lib/music/chords";
 import { intervalPool } from "@/lib/music/intervals";
 import { pick, randomInt, shuffle } from "@/lib/music/notes";
+import { SCALE_DEFS, scaleMelody, scaleRun, type RunDirection } from "@/lib/music/scales";
 import { candidateNotes, noteRange, pickNote, type MissStats } from "./quiz-core";
 import type { TrainerSettings } from "./settings";
 
@@ -166,14 +167,14 @@ export async function generateChord(settings: TrainerSettings, chooseInstrument:
   }
 
   // chord: pick a spec, weighted toward qualities that get missed
-  let spec = randomChordSpec({ categories: settings.chordCategories, inversions: settings.chordInversions, voicings: settings.chordVoicings });
+  let spec = randomChordSpec({ categories: settings.chordCategories, qualities: settings.chordQualities, inversions: settings.chordInversions, voicings: settings.chordVoicings });
   if (settings.adaptive && stats) {
     // re-roll up to 3 times preferring weak qualities
     for (let i = 0; i < 3; i++) {
       const e = stats.byKey[`chord:${spec.qualityId}`];
       const rate = e?.seen ? e.missed / e.seen : 0.3;
       if (Math.random() < 0.4 + rate) break;
-      spec = randomChordSpec({ categories: settings.chordCategories, inversions: settings.chordInversions, voicings: settings.chordVoicings });
+      spec = randomChordSpec({ categories: settings.chordCategories, qualities: settings.chordQualities, inversions: settings.chordInversions, voicings: settings.chordVoicings });
     }
   }
   const span = chordSpan(spec);
@@ -255,6 +256,60 @@ export async function generateCents(settings: TrainerSettings, chooseInstrument:
   const notes = [root, root + third, root + 7];
   const which = randomInt(0, 2);
   return { variant: "chord", instrumentId, notes, detunedIndex: which, cents: sign * pickAmount() };
+}
+
+// ---------------- scales & modes ----------------
+export interface ScaleQuestion {
+  variant: "run" | "melody";
+  scaleId: string;
+  tonic: number;
+  instrumentId: string;
+  direction?: RunDirection;
+  /** Notes with offsets in seconds. */
+  notes: { midi: number; at: number; duration: number }[];
+}
+
+export async function generateScale(settings: TrainerSettings, chooseInstrument: ChooseInstrument, stats?: MissStats): Promise<ScaleQuestion> {
+  const instrumentId = await chooseInstrument();
+  const enabled = settings.scaleSet.length ? SCALE_DEFS.filter((s) => settings.scaleSet.includes(s.id)) : SCALE_DEFS;
+  const pool = enabled.length ? enabled : SCALE_DEFS;
+  let def = pick(pool);
+  if (settings.adaptive && stats) {
+    const weights = pool.map((s) => {
+      const e = stats.byKey[`scale:${s.id}`];
+      return 1 + 3 * (e?.seen ? e.missed / e.seen : 0.3);
+    });
+    let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < pool.length; i++) {
+      r -= weights[i];
+      if (r <= 0) {
+        def = pool[i];
+        break;
+      }
+    }
+  }
+  const tonic = randomInt(0, 11);
+  const [lo, hi] = noteRange(settings, instrumentId);
+  const variant: "run" | "melody" = settings.scaleVariant === "both" ? pick(["run", "melody"] as const) : settings.scaleVariant;
+
+  if (variant === "run") {
+    const direction: RunDirection = settings.scaleDirection === "random" ? pick(["asc", "desc", "both"] as const) : settings.scaleDirection;
+    // start on a tonic pitch so the whole octave sits inside the range, as central as possible
+    const starts: number[] = [];
+    for (let m = lo; m + 12 <= hi; m++) if (m % 12 === tonic) starts.push(m);
+    const mid = (lo + hi) / 2 - 6;
+    const start = starts.length ? starts.reduce((b, m) => (Math.abs(m - mid) < Math.abs(b - mid) ? m : b), starts[0]) : Math.max(lo, Math.min(hi - 12, 60 + tonic - 12));
+    const midis = scaleRun(def.id, start, direction);
+    const step = settings.scaleRunNoteMs / 1000;
+    return { variant, scaleId: def.id, tonic, instrumentId, direction, notes: midis.map((m, i) => ({ midi: m, at: i * step, duration: step * 0.95 })) };
+  }
+
+  const centre = Math.round((lo + hi) / 2);
+  const low = Math.max(lo, centre - 10);
+  const high = Math.min(hi, centre + 12);
+  const melody = scaleMelody(def.id, tonic, { notes: settings.scaleMelodyNotes, low, high });
+  const beat = 60 / settings.scaleMelodyBpm;
+  return { variant, scaleId: def.id, tonic, instrumentId, notes: melody.map((n) => ({ midi: n.midi, at: n.beat * beat, duration: n.duration * beat * 0.9 })) };
 }
 
 /** Convenience for tests / summaries. */

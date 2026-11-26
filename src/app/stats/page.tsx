@@ -12,6 +12,7 @@ import { CategoryAccuracyChart, DailyAccuracyChart, DailyPercentChart, DailyReps
 import { ConfusionMatrix } from "@/components/stats/confusion-matrix";
 import { MATERIAL_LABELS, PROBLEM_LABELS, type MaterialKind, type ProblemType } from "@/lib/mistakes/types";
 import { LEVEL_LABELS, THEORY_KIND_LABELS, type TheoryKind } from "@/lib/compose/theory";
+import { scaleDef } from "@/lib/music/scales";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ const MODE_LABELS: Record<string, string> = {
   sequence: "Sequence",
   intervals: "Intervals",
   chords: "Chords & clusters",
+  scales: "Scales & modes",
   cents: "Cents",
   transcribe: "Hear It, Play It",
   shadow: "Shadow mode",
@@ -65,6 +67,17 @@ export default async function StatsPage(props: PageProps<"/stats">) {
     avgScore: r.avgScore,
   }));
 
+  const scaleRowMap = new Map<string, { label: string; name: string; total: number; correct: number; runs: number; melodies: number }>();
+  for (const r of s.scales) {
+    const def = scaleDef(r.scaleId);
+    const row = scaleRowMap.get(r.scaleId) ?? { label: def?.short ?? r.scaleId, name: def?.name ?? r.scaleId, total: 0, correct: 0, runs: 0, melodies: 0 };
+    row.total += r.total;
+    row.correct += r.correct;
+    if (r.variant === "run") row.runs += r.total;
+    else row.melodies += r.total;
+    scaleRowMap.set(r.scaleId, row);
+  }
+  const scaleRows = [...scaleRowMap.values()];
   const mistakeRows = s.mistakes.byType.map((r) => ({
     label: PROBLEM_SHORT[r.type] ?? r.type,
     name: PROBLEM_LABELS[r.type as ProblemType] ?? r.type,
@@ -87,6 +100,7 @@ export default async function StatsPage(props: PageProps<"/stats">) {
   const weakest = [
     ...pitchRows.map((r) => ({ kind: "Note", ...r })),
     ...mistakeRows.map((r) => ({ kind: "Mistake", label: r.name, total: r.total, correct: r.correct })),
+    ...scaleRows.map((r) => ({ kind: "Scale", label: r.name, total: r.total, correct: r.correct })),
     ...theoryKindRows.map((r) => ({ kind: "Theory", label: r.label, total: r.total, correct: r.correct })),
     ...octaveRows.map((r) => ({ kind: "Octave", label: `Octave ${r.label}`, total: r.total, correct: r.correct })),
     ...s.byInstrument.map((r) => ({ kind: "Instrument", label: instrumentLabel(r.instrumentId), total: r.total, correct: r.correct })),
@@ -107,7 +121,7 @@ export default async function StatsPage(props: PageProps<"/stats">) {
         <RangeFilter active={range.key} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:gap-4 lg:grid-cols-5">
         <StatTile label="Reps" value={s.totals.total.toLocaleString()} hint={range.days ? `last ${range.days} days` : "all time"} />
         <StatTile label="Fully right" value={pct(s.totals.correct, s.totals.total)} hint={s.totals.total ? `average credit ${Math.round(s.totals.avgScore * 100)}%` : undefined} />
         <StatTile label="Today" value={`${s.today.total}`} hint={s.today.total ? `${pct(s.today.correct, s.today.total)} right` : "nothing yet today"} />
@@ -247,6 +261,19 @@ export default async function StatsPage(props: PageProps<"/stats">) {
           </CardContent>
         </Card>
       </div>
+
+      <ChartCard
+        title="Scales & modes"
+        description="Hear a run or a melody, name the scale and its tonic"
+        empty={scaleRows.length === 0}
+        table={{
+          columns: ["Scale", "Runs", "Melodies", "Reps", "Right", "Accuracy"],
+          rows: scaleRows.map((r) => [r.name, r.runs, r.melodies, r.total, r.correct, pct(r.correct, r.total)]),
+          numeric: [1, 2, 3, 4, 5],
+        }}
+      >
+        <CategoryAccuracyChart data={scaleRows} />
+      </ChartCard>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <ChartCard

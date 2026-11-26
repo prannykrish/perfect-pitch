@@ -1,36 +1,47 @@
 import "server-only";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import fs from "node:fs";
-import path from "node:path";
+import { GATE_COOKIE, gateIsOn, isUnlocked } from "../auth/gate";
+import { databaseEnv, ensureMigrated, openDatabase, type Db } from "./connect";
 import * as schema from "./schema";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "perfect-pitch.db");
-const MIGRATIONS = path.join(process.cwd(), "drizzle");
-
-type Db = ReturnType<typeof drizzle<typeof schema>>;
-
 declare global {
-  var __perfectPitchDb: Db | undefined;
+  var __perfectPitchDb: Promise<Db> | undefined;
 }
 
-function createDb(): Db {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const sqlite = new Database(DB_PATH);
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("synchronous = NORMAL");
-  const db = drizzle(sqlite, { schema });
-  // Apply any pending migrations on first use so `npm run dev` just works.
-  if (fs.existsSync(MIGRATIONS)) {
-    migrate(db, { migrationsFolder: MIGRATIONS });
-  }
+async function open(): Promise<Db> {
+  const { url, authToken } = databaseEnv();
+  const { client, db } = openDatabase(url, authToken);
+  // Apply any pending migrations on first use so `npm run dev` and a fresh deploy just work.
+  await ensureMigrated(db, client);
   return db;
 }
 
-// Cache on globalThis so Next.js dev hot reloads do not open a new handle each time.
-export const db: Db = globalThis.__perfectPitchDb ?? createDb();
-if (process.env.NODE_ENV !== "production") globalThis.__perfectPitchDb = db;
+/**
+ * The proxy keeps strangers off the pages, but a server action is a POST that can be aimed at any
+ * path, including ones the proxy leaves alone. Every action goes through getDb, so the gate is
+ * checked again here, next to the data.
+ */
+async function assertUnlocked(): Promise<void> {
+  if (!gateIsOn()) return;
+  const { cookies } = await import("next/headers");
+  const jar = await cookies();
+  if (!(await isUnlocked(jar.get(GATE_COOKIE)?.value))) throw new Error("Locked: enter the password at /unlock.");
+}
+
+/**
+ * The database, opened and migrated once per server process (cached on globalThis so dev hot
+ * reloads and warm serverless invocations reuse it). Every server action starts with
+ * `const db = await getDb()`.
+ */
+export async function getDb(): Promise<Db> {
+  await assertUnlocked();
+  if (!globalThis.__perfectPitchDb) {
+    globalThis.__perfectPitchDb = open().catch((err) => {
+      globalThis.__perfectPitchDb = undefined; // let the next call try again
+      throw err;
+    });
+  }
+  return globalThis.__perfectPitchDb;
+}
 
 export { schema };
+export type { Db };

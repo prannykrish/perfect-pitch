@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type TrainerModeId = "single" | "sequence" | "intervals" | "chords" | "cents";
+export type TrainerModeId = "single" | "sequence" | "intervals" | "chords" | "cents" | "scales";
 export type ComposeTabId = "monitor" | "theory" | "prompt" | "hum";
 export type PracticeTabId = "calendar" | "progress" | "learn";
 export type TranscribeTabId = "phrases" | "shadow";

@@ -20,7 +20,20 @@ import { create } from "zustand";
 import { getInstrument, instrumentLabel, type InstrumentDef } from "./instruments";
 import { SynthInstrument } from "./synth";
 import { clearCachedFormat, detectSampleCapability, otherFormat, withSampleFormat, type SampleCapability, type SampleFormat } from "./sample-format";
-import { noteName } from "@/lib/music/notes";
+import { useAudioPrefs } from "./prefs";
+import { applyAudioSession, isTouchDevice } from "./device";
+import { midiToFrequency, noteName } from "@/lib/music/notes";
+
+/**
+ * The free GM piano's samples from A0 to G♭1 have their fundamental 36–41 dB below the overtones
+ * (measured with scripts/measure-tuning.mjs; from G1 up it is within 7 dB), so those keys sound
+ * like the octave above with a fifth on top and the octave is hard to place. These ids get a sine
+ * at the fundamental added underneath for those keys only.
+ */
+const REINFORCED_PIANOS = new Set(["gm:acoustic_grand_piano", "gm:bright_acoustic_piano"]);
+const REINFORCE_BELOW_MIDI = 31; // G1
+/** Peak gain at full velocity: about 8 dB under the sample's strongest overtone after its 5× soundfont gain. */
+const REINFORCE_GAIN = 0.06;
 
 export interface NoteEventIn {
   note: number; // midi
@@ -68,10 +81,48 @@ interface StreamedManifest {
 
 const CDN_PREFIX = "https://smpldsnds.github.io/";
 
+/** The public home of the General MIDI soundfonts; `npm run samples` downloads these same files. */
+const GM_CDN = "https://gleitz.github.io/midi-js-soundfonts";
+
+/**
+ * Where the sample folders are served from. "" means this site's own /soundfonts and /streamed
+ * (the laptop, after `npm run samples`). Naming a bucket here later puts the streamed sets on the
+ * phone without a code change (PLAN 8c).
+ */
+const SAMPLE_BASE = (process.env.NEXT_PUBLIC_SAMPLE_BASE ?? "").replace(/\/+$/, "");
+/**
+ * Does this build have the sample folders next to it? next.config.ts looks at build time. The
+ * hosted app does not (they are 800 MB and stay out of git), and then it does not ask for them at
+ * all: the GM instruments come straight from the public CDN and are kept by the browser's cache.
+ */
+const HAS_LOCAL_SOUNDFONTS = SAMPLE_BASE !== "" || process.env.NEXT_PUBLIC_LOCAL_SOUNDFONTS === "1";
+const HAS_LOCAL_STREAMED = SAMPLE_BASE !== "" || process.env.NEXT_PUBLIC_LOCAL_STREAMED === "1";
+
+/**
+ * On a phone the streamed sets (Steinway, e-pianos, mallets, orchestral, Mellotron, double bass)
+ * are left out unless an mp3 copy is served (the laptop over Wi‑Fi, or a bucket later). Safari
+ * could decode the CDN's AAC files, but each set is hundreds of megabytes once decoded and a phone
+ * browser kills the tab; the 128 GM instruments and the synths are the phone's instruments.
+ */
+function phoneCapability(): SampleCapability {
+  const skipped = { ok: false, skipped: true, error: "not checked on a phone" };
+  return {
+    status: "unavailable",
+    reason: "phone",
+    format: null,
+    localOpus: skipped,
+    localAac: skipped,
+    cdn: skipped,
+    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+    detail: "On a phone the app plays the 128 General MIDI instruments and the synths. The streamed sets (Steinway, electric pianos, mallets, orchestral, Mellotron, double bass) stay on the laptop.",
+    checkedAt: Date.now(),
+  };
+}
+
 /** CDN sample URL -> local vendored mp3 path (mirrors localRelPath in scripts/vendor-streamed.ts). */
 export function localPathFor(url: string): string | null {
   if (!url.startsWith(CDN_PREFIX)) return null;
-  return "/streamed/" + url.slice(CDN_PREFIX.length).replace(/\.(ogg|m4a)$/i, ".mp3");
+  return SAMPLE_BASE + "/streamed/" + url.slice(CDN_PREFIX.length).replace(/\.(ogg|m4a)$/i, ".mp3");
 }
 
 /** Storage that serves vendored local mp3 files first and falls back to the CDN. */
@@ -136,7 +187,16 @@ export function isInstrumentAvailable(def: InstrumentDef, state: Pick<LoadingSta
   return state.samples?.status !== "unavailable";
 }
 
+/**
+ * Instruments kept decoded in memory. One GM instrument is about 97 MB once decoded (88 notes,
+ * 275 s of stereo float samples; measured), so a phone browser would kill the tab long before 14.
+ * The quiz pools shrink to match (use-quiz.ts).
+ */
 const MAX_LOADED = 14;
+const MAX_LOADED_TOUCH = 4;
+export function maxLoadedInstruments(): number {
+  return isTouchDevice() ? MAX_LOADED_TOUCH : MAX_LOADED;
+}
 
 /** One scheduled playback: which instruments were asked to sound, and whether they did. */
 interface Tracked {
@@ -160,6 +220,45 @@ class Engine {
   private streamedManifest: Promise<StreamedManifest | null> | null = null;
   private silenceListeners = new Set<(ev: SilenceEvent) => void>();
   private pending = new Set<PendingPlayback>();
+  private playListeners = new Set<() => void>();
+  /** Set once a silent sample has been played inside a tap (see unlock). */
+  private unlocked = false;
+  /** Fundamental-reinforcement voices currently sounding (see REINFORCED_PIANOS). */
+  private subs = new Set<{ osc: OscillatorNode; gain: GainNode }>();
+
+  /**
+   * Add a sine at the fundamental under a bass piano key whose sample lacks one. Same start, a
+   * piano-like decay (about 3.7 dB per second, measured on the samples), and a quick release at
+   * the note's end.
+   */
+  private reinforce(instrumentId: string, midi: number, detune: number, time: number, duration: number, velocity: number) {
+    if (!useAudioPrefs.getState().reinforceBass) return;
+    if (!REINFORCED_PIANOS.has(instrumentId) || midi >= REINFORCE_BELOW_MIDI || velocity < 5) return;
+    const ctx = this.context;
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = midiToFrequency(midi, detune);
+    const gain = ctx.createGain();
+    const peak = REINFORCE_GAIN * Math.min(1, velocity / 127);
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(peak, time + 0.015);
+    gain.gain.setTargetAtTime(0, time + 0.015, 2.2);
+    const end = time + Math.min(Math.max(0.1, duration), 8);
+    gain.gain.setTargetAtTime(0, end, 0.06);
+    osc.connect(gain).connect(this.destination);
+    osc.start(time);
+    osc.stop(end + 0.4);
+    const voice = { osc, gain };
+    this.subs.add(voice);
+    osc.onended = () => {
+      this.subs.delete(voice);
+      try {
+        gain.disconnect();
+      } catch {
+        /* ignore */
+      }
+    };
+  }
 
   get context(): AudioContext {
     if (!this.ctx) {
@@ -186,6 +285,55 @@ class Engine {
     if (ctx.state !== "running") await ctx.resume();
   }
 
+  /** True once an AudioContext exists. */
+  get hasContext(): boolean {
+    return this.ctx !== null;
+  }
+
+  /** "running" when sound can come out; "suspended" or iOS's "interrupted" when the browser has paused it. */
+  get state(): string {
+    return this.ctx ? this.ctx.state : "none";
+  }
+
+  /**
+   * Call inside a tap (touchend / click). A phone browser only lets sound start from one, and iOS
+   * pauses the context again whenever the page leaves the screen, so this runs on every tap and does
+   * nothing when all is well. The first time it also plays one silent sample, which older iOS needs
+   * before its audio clock starts, and picks the audio session (silent switch, see device.ts).
+   */
+  unlock(): void {
+    const ctx = this.context;
+    if (ctx.state !== "running") ctx.resume().catch(() => {});
+    if (this.unlocked) return;
+    this.unlocked = true;
+    applyAudioSession(useAudioPrefs.getState().playWhenSilent);
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = ctx.createBuffer(1, 1, 22050);
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch {
+      /* not worth failing a tap over */
+    }
+  }
+
+  /** The page is on screen again: restart a context the browser paused in the background. Needs no tap on most browsers. */
+  wake(): void {
+    if (this.ctx && this.ctx.state !== "running") this.ctx.resume().catch(() => {});
+  }
+
+  /** Called each time something is asked to play, before any loading. Returns the unsubscribe function. */
+  onPlay(listener: () => void): () => void {
+    this.playListeners.add(listener);
+    return () => {
+      this.playListeners.delete(listener);
+    };
+  }
+
+  private announcePlay() {
+    for (const l of this.playListeners) l();
+  }
+
   setVolume(v: number) {
     void this.destination;
     this.master!.gain.value = Math.max(0, Math.min(1, v));
@@ -207,7 +355,7 @@ class Engine {
       const base = this.getStorage();
       if (force) clearCachedFormat();
       useEngineStore.setState({ samplesChecking: true });
-      this.sampleSetup = detectSampleCapability(base, { force })
+      this.sampleSetup = (isTouchDevice() ? Promise.resolve(phoneCapability()) : detectSampleCapability(base, { force }))
         .then((capability) => {
           useEngineStore.setState({ samples: capability, samplesChecking: false });
           return {
@@ -227,8 +375,10 @@ class Engine {
 
   private getStreamedManifest(): Promise<StreamedManifest | null> {
     if (!this.streamedManifest) {
-      this.streamedManifest = fetch("/streamed/manifest.json")
-        .then((r) => (r.ok ? (r.json() as Promise<StreamedManifest>) : null))
+      const asked: Promise<StreamedManifest | null> = HAS_LOCAL_STREAMED
+        ? fetch(`${SAMPLE_BASE}/streamed/manifest.json`).then((r) => (r.ok ? (r.json() as Promise<StreamedManifest>) : null))
+        : Promise.resolve(null);
+      this.streamedManifest = asked
         .then((m) => {
           const vendored = m ? Object.entries(m.instruments).filter(([, v]) => v.done).map(([id]) => id) : [];
           useEngineStore.setState({ vendored });
@@ -320,6 +470,9 @@ class Engine {
     this.pending.add(p);
     setTimeout(() => {
       if (p.cancelled) return;
+      // A paused context (phone in the background, a call, the tab hidden) starts nothing, and that says
+      // nothing about the instrument. Only judge silence while the audio clock is really running.
+      if (this.ctx?.state !== "running" || (typeof document !== "undefined" && document.hidden)) return;
       const silent = tracked.filter((t) => t.started === 0 && t.notes.length > 0);
       if (!silent.length) return;
       for (const t of silent) this.markBroken(t.id, `made no sound for ${[...new Set(t.notes)].slice(0, 6).map((m) => noteName(m)).join(", ")}`);
@@ -331,9 +484,11 @@ class Engine {
 
   private getManifest(): Promise<Manifest | null> {
     if (!this.manifest) {
-      this.manifest = fetch("/soundfonts/manifest.json")
-        .then((r) => (r.ok ? (r.json() as Promise<Manifest>) : null))
-        .catch(() => null);
+      this.manifest = HAS_LOCAL_SOUNDFONTS
+        ? fetch(`${SAMPLE_BASE}/soundfonts/manifest.json`)
+            .then((r) => (r.ok ? (r.json() as Promise<Manifest>) : null))
+            .catch(() => null)
+        : Promise.resolve(null);
     }
     return this.manifest;
   }
@@ -350,10 +505,11 @@ class Engine {
       const manifest = await this.getManifest();
       const local = manifest?.kits?.[kit];
       const format = local?.mp3?.includes(src.name) ? "mp3" : local?.ogg?.includes(src.name) ? "ogg" : null;
-      const opts = format
-        ? { instrumentUrl: `/soundfonts/${kit}/${src.name}-${format}.js`, storage, destination }
-        : { kit, instrument: src.name, storage, destination };
-      const inst = Soundfont(ctx, opts);
+      // Without a local copy, ask the public CDN for the mp3 file by name: the same bytes as the
+      // local download, and mp3 decodes in every browser (left to itself smplr may pick Ogg, which
+      // Safari advertises but cannot always decode).
+      const instrumentUrl = format ? `${SAMPLE_BASE}/soundfonts/${kit}/${src.name}-${format}.js` : `${GM_CDN}/${kit}/${src.name}-mp3.js`;
+      const inst = Soundfont(ctx, { instrumentUrl, storage, destination });
       await inst.ready;
       return inst;
     }
@@ -365,6 +521,7 @@ class Engine {
       formats = ["ogg", "m4a"]; // extension only affects the URL we rewrite; local files are mp3
     } else {
       const setup = await this.getSampleSetup();
+      if (setup.capability.reason === "phone") throw new Error(`${def.label} is one of the streamed sets, which play on the laptop only for now.`);
       if (!setup.format || setup.capability.status !== "ok") {
         throw new Error(
           `${def.label} streams from the CDN and cannot play in this browser. ${setup.capability.detail} Run "npm run samples:streamed" to vendor it locally as mp3.`
@@ -433,9 +590,10 @@ class Engine {
 
   private evict() {
     const loadedEntries = [...this.cache.entries()].filter(([, e]) => e.loaded);
-    if (loadedEntries.length <= MAX_LOADED) return;
+    const max = maxLoadedInstruments();
+    if (loadedEntries.length <= max) return;
     loadedEntries.sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-    const excess = loadedEntries.length - MAX_LOADED;
+    const excess = loadedEntries.length - max;
     for (let i = 0; i < excess; i++) {
       const [id, e] = loadedEntries[i];
       try {
@@ -494,21 +652,24 @@ class Engine {
     midi: number,
     opts: { duration?: number; velocity?: number; detune?: number; at?: number } = {}
   ): Promise<void> {
+    this.announcePlay();
     await this.resume();
     const inst = await this.load(instrumentId);
     const at = (opts.at ?? 0) + 0.02;
     const dur = opts.duration ?? 1.5;
     const tracked: Tracked = { id: instrumentId, notes: [midi], started: 0 };
+    const time = this.currentTime + at;
     const stop = inst.start({
       note: midi,
       velocity: opts.velocity ?? 100,
-      time: this.currentTime + at,
+      time,
       duration: dur,
       detune: opts.detune ?? 0,
       onStart: () => {
         tracked.started++;
       },
     });
+    this.reinforce(instrumentId, midi, opts.detune ?? 0, time, dur, opts.velocity ?? 100);
     this.watch([tracked], [stop], at, at + dur);
   }
 
@@ -519,6 +680,7 @@ class Engine {
   async playNotes(
     notes: { instrumentId: string; midi: number; at: number; duration?: number; velocity?: number; detune?: number }[]
   ): Promise<number> {
+    this.announcePlay();
     await this.resume();
     const ids = [...new Set(notes.map((n) => n.instrumentId))];
     const insts = new Map(await Promise.all(ids.map(async (id) => [id, await this.load(id)] as const)));
@@ -543,6 +705,7 @@ class Engine {
           },
         })
       );
+      this.reinforce(n.instrumentId, n.midi, n.detune ?? 0, base + n.at, dur, n.velocity ?? 100);
       end = Math.max(end, n.at + dur);
       lastStart = Math.max(lastStart, n.at);
     }
@@ -566,6 +729,16 @@ class Engine {
     for (const e of this.cache.values()) {
       try {
         e.instance?.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    const now = this.currentTime;
+    for (const v of this.subs) {
+      try {
+        v.gain.gain.cancelScheduledValues(now);
+        v.gain.gain.setTargetAtTime(0, now, 0.03);
+        v.osc.stop(now + 0.2);
       } catch {
         /* ignore */
       }

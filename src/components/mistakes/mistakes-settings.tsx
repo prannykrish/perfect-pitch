@@ -23,6 +23,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { InstrumentSelect } from "@/components/instrument-select";
 import { MidiPanel } from "@/components/midi-panel";
 import { UploadPiece } from "@/components/transcribe/upload-piece";
+import { DifficultyDial } from "@/components/practice/difficulty-dial";
 
 const SOURCES: Record<MistakesSource, string> = { auto: "Auto (whatever fits the problem)", ...MATERIAL_LABELS };
 const STYLES: Record<PhraseStyle, string> = { stepwise: "Stepwise", mixed: "Mixed", arpeggio: "Arpeggiated", jazz: "Jazz line", bass: "Bass line" };
@@ -96,6 +97,8 @@ export function MistakesSettingsPanel() {
         <CardTitle>Settings</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <DifficultyDial id="mistakes" />
+        <Separator />
         <section className="flex flex-col gap-2">
           <Label>Problem types</Label>
           {PROBLEM_TYPES.map((t) => {
@@ -287,7 +290,7 @@ export function MistakesSettingsPanel() {
             Auto proceed after a right answer
           </SwitchRow>
           {s.autoProceed && <SliderField label="Pause after a right answer" value={s.correctPauseMs} display={`${(s.correctPauseMs / 1000).toFixed(1)}s`} min={200} max={4000} step={100} onChange={(v) => update({ correctPauseMs: v })} />}
-          <p className="text-xs text-muted-foreground">A wrong answer always waits: read what was planted, then Space, Enter or Hear next.</p>
+          <p className="text-xs text-muted-foreground">A wrong answer always waits: read what was planted, then Space (or click Hear next).</p>
           <SwitchRow checked={s.oneListen} onChange={(v) => update({ oneListen: v })}>
             One listen only (no replay while answering)
           </SwitchRow>

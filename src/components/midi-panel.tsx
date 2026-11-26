@@ -35,7 +35,16 @@ export function MidiPanel({ compact = false }: { compact?: boolean }) {
       case "requesting":
         return <Badge variant="outline">Requesting access…</Badge>;
       case "unsupported":
-        return <Badge variant="destructive">Web MIDI not supported (use Chrome/Edge)</Badge>;
+        return (
+          <>
+            <Badge variant="destructive" className="touch:hidden">
+              Web MIDI not supported (use Chrome/Edge)
+            </Badge>
+            <Badge variant="outline" className="touch:inline-flex hidden">
+              Not on a phone or tablet: laptop only
+            </Badge>
+          </>
+        );
       case "denied":
         return <Badge variant="destructive">MIDI access denied</Badge>;
       case "error":
