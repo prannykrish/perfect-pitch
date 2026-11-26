@@ -21,7 +21,7 @@ How Pranav works: he wants each phase explained in plain language before it is b
 - Soundfont samples live in `public/soundfonts/` (gitignored, 300 MB). Run `npm run samples` once on a fresh clone. The engine falls back to the gleitz CDN if a file is missing.
 - Streamed sets (Steinway, e-pianos, mallets, Versilian, Mellotron, double bass) are Opus/AAC on smplr's CDN, which not every browser decodes. `npm run samples:streamed` vendors them as local mp3 into `public/streamed/` (gitignored); `engine.ts` prefers those (`withLocalMirror`) and otherwise probes codec support (`sample-format.ts`) and hides instruments that cannot play (`isInstrumentAvailable`). Always test audio in a real Chrome/Edge window, not the IDE preview.
 - MIDI: Web MIDI API via `src/lib/midi/midi.ts` (USB electric piano). Recorder in `src/lib/midi/recorder.ts`.
-- DB: SQLite at `data/perfect-pitch.db` via Drizzle + better-sqlite3. Schema `src/lib/db/schema.ts`; server actions `src/lib/db/actions.ts`; migrations in `drizzle/` applied automatically on first DB use. After changing the schema: `npm run db:generate`.
+- DB: SQLite through libSQL (`@libsql/client`) + Drizzle. `DATABASE_URL` in `.env.local` names the home of the data: the Turso database the laptop and the phone share (`libsql://…`, with `DATABASE_AUTH_TOKEN`), or, when unset, the file `data/perfect-pitch.db`. Schema `src/lib/db/schema.ts`; opening and migrating in `src/lib/db/connect.ts`; `getDb()` in `src/lib/db/client.ts`; server actions `src/lib/db/actions.ts`; migrations in `drizzle/` applied automatically on first DB use. After changing the schema: `npm run db:generate`.
 - State: zustand; trainer settings persisted to localStorage (`src/lib/trainer/settings.ts`).
 
 ## Trainer architecture (Phase 2+)
@@ -48,6 +48,16 @@ The same app, laid out for an iPhone below `md` and installable from Safari. iOS
 - Install: `src/app/manifest.ts`, icons in `public/icons/` (`npm run icons`), metadata and viewport in `layout.tsx`.
 - He tests over Wi‑Fi: `npm run dev:lan`, the Network address in Safari. `next.config.ts` lists the machine's network addresses in `allowedDevOrigins`. Sound, Add to Home Screen and thumb-sized targets can only be verified by him on the phone; layout can be checked in a headless Chrome with an iPhone profile (see PROGRESS.md → Handoff), with the quiz's server-action POSTs blocked so his practice database is not written to.
 
+## The cloud (Phase 8b)
+
+The app is hosted on Vercel at `https://perfect-pitch-beta-lime.vercel.app` (a push to `main` deploys; `vercel deploy` from the laptop does not work on the free plan) and its data is in Turso. `npm run dev` on the laptop uses that same database, so **a test that writes lands in Pranav's real practice history**: point the process at a copy (`npm run db:backup`, then `DATABASE_URL=file:data/backups/<file>` and `APP_PASSWORD=` in the environment) or block the server-action POSTs in the browser. Never print or commit the values in `.env.local`.
+
+- **Every server action starts with `const db = await getDb()`** and sends several queries as one `db.batch([...])`: the database is a network round trip away. `getDb()` also re-checks the password gate, so do not reach the database any other way from the app. Scripts use `src/lib/db/connect.ts` and `scripts/db-env.ts`.
+- **Never use SQLite's `'localtime'` or the server's own clock for "which day"**: the hosted database and server run in UTC. Use `dayOf(column)` in `actions.ts` and the helpers in `src/lib/db/time.ts` (`APP_TIMEZONE`, default the machine's zone). Do not alias a column `length` (or any array property) in raw SQL: libSQL rows are array-like and the alias loses.
+- **The gate**: `src/lib/auth/gate.ts` (HMAC cookie), `src/proxy.ts` (Next 16's name for middleware), `src/app/unlock/`. On when `APP_PASSWORD` is set. A new route that must be reachable without the password has to be added to the proxy's matcher; everything else is gated by default.
+- **Samples when hosted**: no `public/soundfonts` or `public/streamed` there. GM instruments come from the gleitz CDN as mp3; a touch device hides the streamed sets (`phoneCapability` in `engine.ts`); `NEXT_PUBLIC_SAMPLE_BASE` can name a bucket later. `SAMPLES_FROM_CDN=1 npm run build` builds the hosted way on the laptop.
+- Run `npx tsx scripts/selftest-db.mts` after touching `src/lib/db/` or `src/lib/auth/`.
+
 ## Conventions
 
 - MIDI numbers are the canonical note representation (60 = C4). Helpers in `src/lib/music/notes.ts`.
@@ -69,6 +79,9 @@ npm run samples:streamed  # vendor streamed sets as local mp3 (once, ~15 min; --
 npm run pieces       # rebuild the bundled Bach chorales from the JSB dataset
 npm run selftest     # generator + grader checks (no browser needed)
 npm run db:generate  # after schema changes
-npm run db:studio    # browse the SQLite db
-npm run db:reset-stats  # wipe attempts / sessions / chunk progress (--all also wipes takes, uploads, plans)
+npm run db:studio    # browse the database the app uses
+npm run db:backup    # pull a dated copy of the cloud database into data/backups/
+npm run db:copy      # copy all data between two databases: -- --from local|cloud|file:… --to … [--force] [--dry-run]
+npm run db:reset-stats  # wipe attempts / sessions / chunk progress (--all also wipes takes, uploads, plans); on the cloud database it needs --yes
+git push             # deploys: Vercel builds main from the private GitHub repo
 ```

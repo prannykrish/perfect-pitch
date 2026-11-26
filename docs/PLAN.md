@@ -32,7 +32,7 @@ Every feature must train at least one of those measurably, and every attempt is 
 - **Every rep is data**: every attempt stores target, answer, instrument, mode, response time, replays and a settings snapshot. Stats and adaptive selection are built on this.
 - **Verify by MIDI when possible**: the USB piano is the primary way to answer in transcription and composition modes. Buttons and an on-screen piano are always available as a toggle.
 - **Ground truth first**: transcription drills are only graded against sources where the app knows the exact notes (generated phrases, MIDI files). Audio-only sources cannot be auto-graded reliably.
-- **Local first**: runs with one command on this PC. Data lives in a local SQLite file. Can move to Supabase/Postgres later without changing the app code (Drizzle ORM on both).
+- **Local first, then one home for the data**: runs with one command on this PC. Until 2026-11-25 the data lived in a local SQLite file; since Phase 8b it lives in one cloud database (Turso, the same SQLite dialect) that the laptop and the phone share, and the app is also hosted so the phone needs no laptop. The file stays as a backup, and the app still runs against a file when `DATABASE_URL` is unset.
 
 ## 3. Stack
 
@@ -49,8 +49,9 @@ Every feature must train at least one of those measurably, and every attempt is 
 | MIDI files | `@tonejs/midi` | Import pieces for transcription drills |
 | Mic pitch | `pitchy` (McLeod method) | Monophonic only: humming, single-line acoustic piano |
 | State | React state + `zustand` for engine/settings | |
-| Database | SQLite (`better-sqlite3`) + Drizzle ORM | File at `data/perfect-pitch.db`, gitignored. Swap to Supabase later by changing the Drizzle driver |
-| Data access | Next.js server actions | Client never touches DB directly |
+| Database | SQLite through libSQL (`@libsql/client`) + Drizzle ORM | One driver, two homes: Turso in the cloud (`DATABASE_URL=libsql://…`, shared by laptop and phone) or the file `data/perfect-pitch.db` (the default when `DATABASE_URL` is unset; gitignored) |
+| Data access | Next.js server actions | Client never touches DB directly. Every action opens with `await getDb()`; several queries go as one `db.batch` |
+| Hosting | Vercel (Hobby), from the private GitHub repo | A push to `main` deploys. Password gate in `src/proxy.ts` + `/unlock` |
 
 Node 24, npm. Windows 11.
 
@@ -69,7 +70,10 @@ src/components/           App components (piano, piano-roll, quiz shell, nav)
 src/lib/audio/            engine.ts (playback), instruments.ts (registry + ranges), synth.ts (noise generator)
 src/lib/music/            notes.ts, chords.ts, generators.ts (question/phrase generation)
 src/lib/midi/             useMidiInput.ts, recorder.ts, player.ts
-src/lib/db/               schema.ts, client.ts, actions.ts (server actions)
+src/lib/db/               schema.ts, connect.ts (open + migrate), client.ts (getDb), actions.ts (server actions), time.ts (which day a rep belongs to), copy.ts
+src/lib/auth/gate.ts      The hosted app's password gate (cookie HMAC); src/proxy.ts and src/app/unlock/ use it
+drizzle/                  Migrations, applied on first database use
+vercel.json               Hosting region (next to the database)
 src/lib/stats/            aggregation helpers
 ```
 
@@ -288,6 +292,15 @@ Three tabs under one nav entry (widened by Pranav on 2026-09-24: "a calendar, bu
 - *Password gate.* `src/proxy.ts` (Next 16's middleware convention) checks an `httpOnly` cookie holding an HMAC of `APP_PASSWORD`; otherwise redirects to `/unlock`, a one-field page that sets the cookie for a year. Static assets excluded. Gate off when `APP_PASSWORD` is unset (local dev).
 - *Deploy.* Push to a private GitHub repo; Vercel imports it; env vars `DATABASE_URL`, `DATABASE_AUTH_TOKEN`, `APP_PASSWORD`; function region matching the Turso location. Secrets live in `.env.local` (gitignored) on the laptop, never in chat or git.
 - *Acceptance.* Laptop off: the phone opens the Vercel URL, asks for the password once, then every tab works; a rep logged on the phone appears in Stats on the laptop; all pre-existing history (sessions, attempts, takes, pieces, plans, level state) is there; the 128 GM instruments and the synths load on the phone, the streamed sets are hidden there and still work on the laptop; `npm run dev` works against either URL; the Vercel build is green.
+- *As built (2026-11-25), where it differs from or adds to the lines above.*
+  - **The address** is `https://perfect-pitch-beta-lime.vercel.app` (Vercel's own choice of name). The other addresses Vercel generates (`…-pranav-krishnans-projects.vercel.app`, per-deployment ones) sit behind Vercel's login and are not for the phone.
+  - **Days are counted in a named timezone.** On the laptop SQLite's `'localtime'` decided which day a rep belonged to; a hosted database and server run in UTC, where an evening session would land on tomorrow (measured on his data: longest streak 6 instead of 10, 1,579 stat values different). `APP_TIMEZONE` (an IANA name, `America/Chicago`, set on Vercel and in `.env.local`; default = the machine's own zone) names the zone, and `src/lib/db/time.ts` writes the UTC offset into the SQL, split at each daylight-saving change, so old reps keep their day. Travelling does not move days: they stay in the home zone.
+  - **One round trip per page.** The database is now across the network, so every action that needs several queries sends them as one `db.batch` (all of Stats is one request; measured from the laptop: 60–110 ms per action). The connection is plain HTTPS (the `libsql://` address is rewritten to `https://`), not a WebSocket, because a serverless function cannot keep a socket alive.
+  - **The gate is checked twice**: in `src/proxy.ts` for every page and server action, and again in `getDb()` next to the data, because a server action is a POST that can be aimed at a path the proxy leaves alone (the icons and the manifest are left open so the phone can install the app). The cookie is an HMAC keyed by the password, so changing `APP_PASSWORD` on Vercel signs every device out. A wrong password costs 0.6 s.
+  - **Streamed sets on a phone are switched off on purpose**, not by the codec check: Safari does decode the CDN's AAC files, so the check alone would have let them through, and each set is hundreds of megabytes once decoded. On a touch device the engine skips the check and reports "laptop only" (`phoneCapability` in `engine.ts`) unless an mp3 copy is served (the laptop over Wi‑Fi, or a bucket through `NEXT_PUBLIC_SAMPLE_BASE` later). In a laptop browser the hosted app streams them from smplr's CDN; `npm run dev` on the laptop still uses the local mp3 copies.
+  - **GM instruments hosted** are asked for by name as mp3 from the gleitz CDN (the same files `npm run samples` downloads), rather than letting smplr choose Ogg, which Safari advertises but may not decode. `next.config.ts` tells the engine at build time whether the sample folders exist, so the hosted app never asks its own site for them.
+  - **Scripts.** `npm run db:copy -- --from local --to cloud` (or any `file:` path) copies every table with ids kept, then reads both sides back and compares every row; a target that holds data is refused without `--force`. `npm run db:backup` pulls a dated copy into `data/backups/`. `npm run db:reset-stats` acts on the database the app uses and, when that is the cloud one, does nothing without `--yes`.
+  - **Deploying** is `git push` to `main` (Vercel is connected to the GitHub repo). `vercel deploy` from the laptop does not work on the free plan: it counts the local sample folders and hits the upload limit.
 
 **8c — later, optional.** Cloudflare R2 (or any bucket) for the streamed sets on the phone, via `NEXT_PUBLIC_SAMPLE_BASE` and an upload script; service worker so the shell and the last-used instruments open with no signal; one-tap "start today's first drill" on the home screen; hum then play on the phone (HTTPS gives the mic).
 
@@ -301,7 +314,7 @@ Three tabs under one nav entry (widened by Pranav on 2026-09-24: "a calendar, bu
 - `practice_plans`: id, date, items (json), notes
 - `settings`: key/value (last used settings per mode)
 
-Migration to Supabase: same Drizzle schema on Postgres, swap the client, add auth if multi-user is ever wanted.
+Since Phase 8b the tables live in Turso (libSQL), with the same schema and the same migrations in `drizzle/`; `attempts` also carries `level_id` / `drill_id`. Migrations are applied by the app on its first database use (laptop or hosted), so after `npm run db:generate` the next start of either brings the shared database up to date. Postgres / Supabase would still be the same Drizzle schema with a different driver, if multi-user is ever wanted.
 
 ## 8. How the app trains "hear it in your head and play it" and "hear a song and play it"
 
@@ -336,7 +349,7 @@ Each phase ends in something usable. Acceptance criteria are what a new session 
 - **Phase 6 — Head to Keys depth** ✅ built 2026-09-24, awaiting Pranav's hands-on check: theory drills with six levels (chords by name, scales and modes, progressions, harmonisation) graded from MIDI with three strictness levels; prompt drill with countdown, count-in, click, backing, self-rating and first-note latency; hum-then-play with pitchy; recorder tempo / quantize / loop / .mid export.
 - **Phase 7 — Practice & Learn** ✅ built 2026-09-24, awaiting Pranav's check: planner with completion from attempts, starter programme, heatmap and streaks, Progress skills, Learn lessons and glossary.
 - **"phase: levels" — Difficulty dials** ✅ built 2026-10-24, awaiting Pranav's check (spec under Tab 6 → "Difficulty dials"): a 1–8 dial per activity that writes a coherent settings bundle, with a custom state; a playground beside the ladder (counts only through Always count, when the settings land exactly on a drill's test).
-- **Phase 8 — The phone** (agreed 2026-11-24; spec under Tab 6 → "Phase 8: the phone"): **8a ✅ built 2026-11-24, awaiting Pranav's check on the iPhone** (mobile layout, GarageBand-style piano window, installable, iOS audio); 8b lives in the cloud (Turso, public CDN samples, password gate, Vercel), trigger "phase: cloud"; 8c later polish (offline, one-tap drill, hum on the phone). MusyngKite set stays on the later list.
+- **Phase 8 — The phone** (agreed 2026-11-24; spec under Tab 6 → "Phase 8: the phone"): **8a ✅ built 2026-11-24, awaiting Pranav's check on the iPhone** (mobile layout, GarageBand-style piano window, installable, iOS audio); **8b ✅ built and deployed 2026-11-25, awaiting Pranav's check on the iPhone** (Turso with his whole history copied up, public CDN samples, password gate, Vercel at `https://perfect-pitch-beta-lime.vercel.app`); 8c later polish (offline, one-tap drill, hum on the phone, a bucket for the streamed sets). MusyngKite set stays on the later list.
 
 ## 10. Decisions log
 
@@ -381,5 +394,9 @@ Each phase ends in something usable. Acceptance criteria are what a new session 
 | 2026-11-24 | A phone keeps 4 instruments decoded and rotates a random pool of 3 (laptop: 14 and 6). Measured: one GM instrument is about 97 MB once decoded, so the laptop's numbers would get the tab killed on a phone. The engine also stops judging an instrument "silent" while the audio is paused (background, a call), which on a phone would have dropped the piano from the pools |
 | 2026-11-24 | On a phone, messages (toasts) come in at the top: the bottom is where answers are tapped. Controls get a 36 px minimum height wherever the main pointer is a finger. Next's dev badge is off (it covered the first tab and swallowed its taps) |
 | 2026-11-24 | After Pranav's first try on the phone ("flimsy… my hand can slip and easily move things around"): on a phone the Trainer and Find the Mistake are a fixed, non-scrolling screen (the stage) with one side panel for the level bar, modes, settings and pages. Nothing on it changes position between idle, question and answer. The tab bar hides while a quiz runs (its space stays empty). A note with its octave is answered on the piano or with the buttons, never both on screen. Laptop unchanged |
+| 2026-11-25 | Cloud build (8b), decided while building: practice days are counted in one named timezone (`APP_TIMEZONE`, America/Chicago) with the offset written into the SQL per daylight-saving period, because a hosted database has no "local time" and his streaks and the three-day gate rule depend on the day. Days stay in the home zone when travelling |
+| 2026-11-25 | On a phone the streamed sets are hidden by an explicit rule, not by the codec check the plan relied on (Safari can decode them; the reason to keep them off is memory). The hosted app loads GM instruments as mp3 by name from the public CDN, the same files as the laptop's local copies |
+| 2026-11-25 | The password gate is enforced in two places (the proxy, and `getDb()` beside the data). The install manifest and icons are the only things readable without the password. `db:reset-stats` refuses to wipe the cloud database without `--yes` |
+| 2026-11-25 | Deploys happen by pushing to `main` (Vercel builds from the private GitHub repo). Because the phase says "push", this session committed and pushed everything built since September in one commit; earlier sessions had left committing to Pranav |
 | 2026-10-24 | Difficulty dials built as specified. The dial sits at the top of each settings card (trainer: the active mode's dial; compose: one inside each of the Theory / Prompt / Hum sections). Pressing the active number again keeps the level (no deselect). Hovering a number shows that level's title |
 | 2026-09-26 | Pranav practises on laptop speakers, which cannot reproduce fundamentals below about 80 Hz, so A0–G♭1 were impossible in the app while automatic on his piano. Level 0 (and the single-note drills of levels 1–2) now start at G1; the ten lowest keys are their own drill at level 2 with a headphones note |
