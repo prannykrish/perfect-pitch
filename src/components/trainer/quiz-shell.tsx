@@ -177,8 +177,15 @@ export function QuizShell({ quiz, title, idleText, questionText, feedback, extra
   );
 }
 
-/** Green/red feedback banner used by every mode. */
-export function FeedbackBanner({ correct, partial, children }: { correct: boolean; partial?: boolean; children: ReactNode }) {
+/**
+ * Green/red feedback banner used by every mode.
+ *
+ * `sideways:` = a phone on its side, where the result has one short row of the screen
+ * (phone-stage.tsx). `oneLine` is for a result that is a single line of text: there it never wraps,
+ * and whatever does not fit is cut at the banner's edge rather than making it taller.
+ */
+export function FeedbackBanner({ correct, partial, oneLine, children }: { correct: boolean; partial?: boolean; oneLine?: boolean; children: ReactNode }) {
   const tone = correct ? "border-green-500/50 bg-green-500/10" : partial ? "border-amber-500/50 bg-amber-500/10" : "border-red-500/50 bg-red-500/10";
-  return <div className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 max-sm:gap-x-2 max-sm:gap-y-1 max-sm:px-3 max-sm:py-2 ${tone}`}>{children}</div>;
+  const line = oneLine ? "sideways:flex-nowrap sideways:overflow-hidden sideways:whitespace-nowrap" : "";
+  return <div className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 max-sm:gap-x-2 max-sm:gap-y-1 max-sm:px-3 max-sm:py-2 sideways:gap-x-2 sideways:gap-y-0.5 sideways:px-3 sideways:py-1 ${line} ${tone}`}>{children}</div>;
 }

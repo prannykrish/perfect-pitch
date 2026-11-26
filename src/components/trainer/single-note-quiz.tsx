@@ -160,17 +160,18 @@ export function SingleNoteQuiz() {
       feedback={
         question &&
         answer && (
-          <FeedbackBanner correct={!!scored?.correct}>
-            {scored?.correct ? <CheckIcon className="size-6 text-green-500" /> : <XIcon className="size-6 text-red-500" />}
-            <div className="text-2xl font-semibold tabular-nums">
+          <FeedbackBanner correct={!!scored?.correct} oneLine>
+            {scored?.correct ? <CheckIcon className="size-6 shrink-0 text-green-500" /> : <XIcon className="size-6 shrink-0 text-red-500" />}
+            <div className="shrink-0 text-2xl font-semibold tabular-nums">
               {settings.answerMode === "pitch-octave" ? noteName(question.midi) : PITCH_CLASS_SHORT[pitchClassOf(question.midi)]}
             </div>
             {!scored?.correct && (
-              <div className="text-muted-foreground">
+              <div className="shrink-0 text-muted-foreground">
                 you said <span className="font-semibold text-foreground">{answer.midi !== undefined ? noteName(answer.midi) : PITCH_CLASS_SHORT[answer.pitchClass]}</span>
               </div>
             )}
-            <div className="ml-auto text-sm text-muted-foreground max-sm:text-xs">
+            {/* On a phone held sideways the result is one line: this detail takes what is left of it, or goes. */}
+            <div className="ml-auto text-sm text-muted-foreground max-sm:text-xs sideways:min-w-0 sideways:flex-1 sideways:truncate sideways:text-right sideways:text-xs">
               {instrumentLabel(question.instrumentId)} · {Math.round(quiz.lastResponseMs)} ms{answer.via === "midi" && " · piano"}
             </div>
           </FeedbackBanner>

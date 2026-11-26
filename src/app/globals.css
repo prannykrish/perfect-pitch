@@ -5,6 +5,8 @@
 @custom-variant dark (&:is(.dark *));
 /* A finger, not a mouse (phones, tablets). `touch:hidden` hides keyboard hints there. */
 @custom-variant touch (@media (hover: none));
+/* A phone held sideways: touch, landscape, too short for a page. The same query as useIsPhoneSideways(). */
+@custom-variant sideways (@media (hover: none) and (orientation: landscape) and (max-height: 540px));
 
 @theme inline {
   --color-background: var(--background);

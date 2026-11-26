@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { EllipsisIcon, MoonIcon, Music2Icon, SettingsIcon, SunIcon } from "lucide-react";
 import { useStage } from "@/lib/stage-store";
+import { useIsPhoneSideways } from "@/lib/hooks/use-media";
 import { MORE_TABS, PHONE_TABS, isActivePath as isActive } from "@/components/nav-items";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -26,6 +27,8 @@ export function AppNav() {
   const [moreOpen, setMoreOpen] = useState(false);
   // A quiz is running on the phone's fixed screen: the bar steps aside so a stray thumb cannot leave it.
   const quizRunning = useStage((s) => s.focus);
+  const stageUp = useStage((s) => s.mounted);
+  const sideways = useIsPhoneSideways();
   const toggleTheme = () => setTheme(resolvedTheme === "dark" ? "light" : "dark");
 
   // The browser's own chrome (and the phone's status bar) takes the colour of the page behind it.
@@ -36,6 +39,9 @@ export function AppNav() {
 
   // The lock screen of the hosted app: nothing to navigate to yet.
   if (pathname === "/unlock") return null;
+  // A phone on its side showing a quiz: the screen is too short to give any of it to a bar, and the
+  // pages are in the quiz's side panel. (Upright, the tab bar stays and only hides during a quiz.)
+  if (sideways && stageUp) return null;
 
   return (
     <>
